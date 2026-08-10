@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 
-from awayout.ollama import OllamaClient
+from awayout.providers import ChatClient
 
 
 STRATEGIES = {
@@ -19,7 +19,7 @@ class AttackerLLM:
     def __init__(
         self,
         objective: str,
-        client: OllamaClient,
+        client: ChatClient,
         model: str,
         strategy: str = "logical_appeal",
         temperature: float = 1.0,
@@ -55,9 +55,7 @@ Do not invent a target response.
 Return ONLY valid JSON:
 {{"improvement":"short explanation of what changed","prompt":"exact next prompt to send"}}
 """
-        self.history = [
-            {"role": "system", "content": system},
-        ]
+        self.history = [{"role": "system", "content": system}]
 
     def switch_strategy(self, strategy: str) -> None:
         if strategy not in STRATEGIES:
