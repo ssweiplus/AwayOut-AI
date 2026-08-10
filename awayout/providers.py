@@ -63,10 +63,13 @@ class OpenAICompatibleClient:
 
 
 class CommandClient:
-    """Generic local CLI model provider. The full conversation is passed on stdin as JSON."""
+    """Generic local CLI provider for CodeAgent-like tools."""
 
-    def __init__(self, command_template: str, timeout: int = 120):
+    def __init__(self, command_template: str, stdin_mode: str = "json", timeout: int = 120):
+        if stdin_mode not in {"json", "prompt"}:
+            raise ValueError("stdin_mode must be 'json' or 'prompt'")
         self.command_template = command_template
+        self.stdin_mode = stdin_mode
         self.timeout = timeout
 
     def is_running(self) -> bool:
@@ -87,9 +90,14 @@ class CommandClient:
         rendered = self.command_template.replace("{model}", model)
         return shlex.split(rendered, posix=os.name != "nt")
 
-    def chat(self, messages: list[dict[str, str]], model: str, temperature: float = 0.7, max_tokens: int = 1200) -> str:
-        command = self._build_command(model)
-        payload = json.dumps(
+    def _stdin_payload(self, messages: list[dict[str, str]], model: str, temperature: float, max_tokens: int) -> str:
+        if self.stdin_mode == "prompt":
+            blocks = []
+            for message in messages:
+                role = message.get("role", "user").upper()
+                blocks.append(f"[{role}]\n{message.get('content', '')}")
+            return "\n\n".join(blocks)
+        return json.dumps(
             {
                 "model": model,
                 "messages": messages,
@@ -98,6 +106,10 @@ class CommandClient:
             },
             ensure_ascii=False,
         )
+
+    def chat(self, messages: list[dict[str, str]], model: str, temperature: float = 0.7, max_tokens: int = 1200) -> str:
+        command = self._build_command(model)
+        payload = self._stdin_payload(messages, model, temperature, max_tokens)
         result = subprocess.run(
             command,
             input=payload,
