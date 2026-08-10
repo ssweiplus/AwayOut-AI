@@ -1,5 +1,5 @@
 @echo off
-setlocal EnableExtensions
+setlocal EnableExtensions EnableDelayedExpansion
 cd /d "%~dp0"
 chcp 65001 >nul
 
@@ -9,10 +9,10 @@ echo ============================================================
 
 set "PY_CMD="
 where py >nul 2>nul
-if %errorlevel%==0 set "PY_CMD=py -3"
+if not errorlevel 1 set "PY_CMD=py -3"
 if not defined PY_CMD (
   where python >nul 2>nul
-  if %errorlevel%==0 set "PY_CMD=python"
+  if not errorlevel 1 set "PY_CMD=python"
 )
 
 if not defined PY_CMD (
@@ -48,11 +48,11 @@ if not exist ".venv\Scripts\python.exe" (
 
 set "VENV_PY=.venv\Scripts\python.exe"
 echo [INFO] Updating pip...
-"%VENV_PY%" -m pip install --upgrade pip
+"!VENV_PY!" -m pip install --upgrade pip
 if errorlevel 1 goto :fail
 
 echo [INFO] Installing Python dependencies...
-"%VENV_PY%" -m pip install -r requirements.txt
+"!VENV_PY!" -m pip install -r requirements.txt
 if errorlevel 1 goto :fail
 
 where ollama >nul 2>nul
@@ -70,14 +70,14 @@ if errorlevel 1 (
 
 echo [OK] Ollama command found.
 
-powershell -NoProfile -Command "try { $r=Invoke-WebRequest -UseBasicParsing -TimeoutSec 3 http://127.0.0.1:11434/api/tags; exit 0 } catch { exit 1 }" >nul 2>nul
+powershell -NoProfile -Command "try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 3 http://127.0.0.1:11434/api/tags ^| Out-Null; exit 0 } catch { exit 1 }" >nul 2>nul
 if errorlevel 1 (
   echo [INFO] Ollama API is not responding. Trying to start 'ollama serve'...
   start "AwayOut-AI Ollama" /min cmd /c "ollama serve"
   timeout /t 3 /nobreak >nul
 )
 
-powershell -NoProfile -Command "try { $r=Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 http://127.0.0.1:11434/api/tags; exit 0 } catch { exit 1 }" >nul 2>nul
+powershell -NoProfile -Command "try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 http://127.0.0.1:11434/api/tags ^| Out-Null; exit 0 } catch { exit 1 }" >nul 2>nul
 if errorlevel 1 (
   echo.
   echo [ERROR] Ollama is installed but the API is not reachable at http://127.0.0.1:11434
@@ -89,26 +89,26 @@ if errorlevel 1 (
 
 echo [OK] Ollama API is reachable.
 
+set "MODEL_COUNT=0"
 for /f %%C in ('powershell -NoProfile -Command "$j=Invoke-RestMethod http://127.0.0.1:11434/api/tags; @($j.models).Count"') do set "MODEL_COUNT=%%C"
-if "%MODEL_COUNT%"=="0" (
+if "!MODEL_COUNT!"=="0" (
   echo.
   echo [INFO] No Ollama model is installed.
+  set "PULL_MODEL="
   set /p "PULL_MODEL=Download the default 'mistral' model now? [Y/n]: "
-  if /I not "%PULL_MODEL%"=="n" (
+  if /I not "!PULL_MODEL!"=="n" (
     echo [INFO] Running: ollama pull mistral
     ollama pull mistral
-    if errorlevel 1 (
-      echo [WARN] Model download failed. You can retry later with: ollama pull mistral
-    )
+    if errorlevel 1 echo [WARN] Model download failed. You can retry later with: ollama pull mistral
   )
 ) else (
   echo [OK] At least one Ollama model is already installed.
 )
 
 echo.
-"%VENV_PY%" doctor.py
-set "DOCTOR_RC=%errorlevel%"
-if "%DOCTOR_RC%"=="0" (
+"!VENV_PY!" doctor.py
+set "DOCTOR_RC=!errorlevel!"
+if "!DOCTOR_RC!"=="0" (
   echo.
   echo ============================================================
   echo Setup complete. Next time, double-click run_windows.bat
@@ -120,7 +120,7 @@ if "%DOCTOR_RC%"=="0" (
 
 echo.
 pause
-exit /b %DOCTOR_RC%
+exit /b !DOCTOR_RC!
 
 :fail
 echo.
