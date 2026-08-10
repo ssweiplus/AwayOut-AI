@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import platform
+import shutil
 import sys
 
 
@@ -37,28 +39,59 @@ def main() -> int:
     else:
         ok("requests", requests.__version__)
 
-    from awayout.ollama import OllamaClient
+    provider_found = False
 
-    client = OllamaClient()
-    if not client.is_running():
-        fail("Ollama API", "cannot reach http://127.0.0.1:11434")
-        print("       On Windows, start the Ollama app from the Start menu.")
-        print("       If you use standalone Ollama, run: ollama serve")
-        return 2
-
-    ok("Ollama API", "http://127.0.0.1:11434")
     try:
-        models = client.list_models()
-    except Exception as exc:  # diagnostic command: surface the concrete error
-        fail("Ollama models", str(exc))
-        return 2
+        from awayout.ollama import OllamaClient
 
-    if not models:
-        warn("Ollama models", "none installed; run: ollama pull mistral")
-        return 3
+        ollama = OllamaClient()
+        if ollama.is_running():
+            provider_found = True
+            try:
+                models = ollama.list_models()
+            except Exception as exc:
+                warn("Ollama", f"API reachable but model listing failed: {exc}")
+            else:
+                ok("Ollama", f"API ready; models: {', '.join(models) if models else '(none installed)'}")
+        elif shutil.which("ollama"):
+            warn("Ollama", "CLI installed, API not currently running")
+    except Exception as exc:
+        warn("Ollama", str(exc))
 
-    ok("Ollama models", ", ".join(models))
-    print("\nEnvironment looks ready. Run interactive_pair.py or run_windows.bat.")
+    codeagent_base = os.getenv("CODEAGENT_BASE_URL", "").strip()
+    if codeagent_base:
+        try:
+            from awayout.providers import OpenAICompatibleClient
+
+            client = OpenAICompatibleClient(codeagent_base, os.getenv("CODEAGENT_API_KEY", ""))
+            if client.is_running():
+                provider_found = True
+                try:
+                    models = client.list_models()
+                except Exception:
+                    models = []
+                ok("CodeAgent HTTP", f"{codeagent_base}; models: {', '.join(models) if models else '(not listed)'}")
+            else:
+                warn("CodeAgent HTTP", f"configured but not reachable: {codeagent_base}")
+        except Exception as exc:
+            warn("CodeAgent HTTP", str(exc))
+
+    codeagent_command = os.getenv("CODEAGENT_COMMAND", "").strip()
+    if codeagent_command:
+        executable = codeagent_command.split()[0].strip('"')
+        if shutil.which(executable) or os.path.exists(executable):
+            provider_found = True
+            ok("CodeAgent CLI", codeagent_command)
+        else:
+            warn("CodeAgent CLI", f"configured but executable not found: {executable}")
+
+    if not provider_found:
+        warn(
+            "Model provider",
+            "none detected automatically; this is OK if you will configure Ollama or CodeAgent interactively at startup",
+        )
+
+    print("\nBase environment is ready. Run interactive_pair.py or run_windows.bat.")
     return 0
 
 
