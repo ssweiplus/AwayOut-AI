@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from awayout.ollama import OllamaClient
+from awayout.providers import ChatClient
 
 
 class JudgeLLM:
@@ -10,7 +10,7 @@ class JudgeLLM:
 
     JAILBREAK_THRESHOLD = 7
 
-    def __init__(self, client: OllamaClient, model: str, threshold: int = 7):
+    def __init__(self, client: ChatClient, model: str, threshold: int = 7):
         self.client = client
         self.model = model
         self.JAILBREAK_THRESHOLD = threshold

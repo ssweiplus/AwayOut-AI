@@ -2,84 +2,77 @@
 
 AwayOut-AI is a human-in-the-loop assistant for **authorized chatbot security testing**.
 
-The current version implements a PAIR-style interactive workflow for real dialog boxes that do not expose an API:
+It generates a test prompt with an Attacker LLM, lets the tester send that prompt manually to a real dialog box, evaluates the pasted response with a Judge LLM, then uses the result to generate the next attempt.
 
 ```text
 Objective
    ↓
-Attacker LLM (local Ollama)
+Attacker LLM
    ↓
 Suggested test prompt
    ↓
-Human copies prompt into target chatbot
+Human sends prompt to target chatbot
    ↓
-Human pastes target response into AwayOut-AI
+Human pastes target response back
    ↓
-Judge LLM (local Ollama)
+Judge LLM
    ↓
 Score + feedback
    ↓
-Attacker generates the next prompt
+Next test prompt
 ```
-
-The target system remains manual. Only the Attacker and Judge models run locally through Ollama.
 
 > Use only on systems you are authorized to test.
 
+## Model providers
+
+Attacker and Judge are no longer tied to Ollama. At startup you can choose:
+
+1. **Ollama**
+2. **CodeAgent / OpenAI-compatible HTTP API**
+3. **CodeAgent CLI command**
+
+The real target chatbot is still operated manually and does not need an API.
+
 ---
 
-## Windows: quickest way to run
+## Windows: download and run
 
 ### Requirements
 
-You need:
+Required:
 
-1. **Windows 10 22H2 or newer / Windows 11**.
-2. **Python 3.10 or newer**.
-3. **Ollama for Windows**.
-4. Enough disk/RAM for the Ollama model you choose.
+- Windows 10/11
+- Python 3.10+
+- network/local access to at least one supported model provider
 
-Python download:
-
-- https://www.python.org/downloads/windows/
-
-Ollama Windows download:
-
-- https://ollama.com/download/windows
-
-The normal Ollama Windows installer runs Ollama in the background and exposes the local API at:
+Python dependency:
 
 ```text
-http://127.0.0.1:11434
+requests>=2.31.0,<3.0.0
 ```
 
-You normally **do not need to run `ollama serve` manually** after installing the Windows app. If the API is not available, start Ollama from the Windows Start menu. The setup script also tries `ollama serve` as a fallback.
+You do **not** need Ollama if you use CodeAgent.
 
 ### First run
 
-Download/clone this repository, then simply double-click:
+Download or clone the repository and double-click:
 
 ```text
 setup_windows.bat
 ```
 
-The setup script will:
+It will:
 
-- find `py` or `python`;
-- verify Python 3.10+;
-- create a local `.venv` virtual environment;
-- upgrade pip inside `.venv`;
-- install `requirements.txt`;
-- check whether the `ollama` command exists;
-- open the official Ollama Windows download page if Ollama is missing;
-- verify the Ollama API;
-- detect whether any local models are installed;
-- offer to download `mistral` when no model exists;
-- run `doctor.py` for a final environment check.
+- detect Python;
+- require Python 3.10+;
+- create `.venv` locally in the project;
+- install Python dependencies;
+- run `doctor.py`.
 
-No global Python packages are installed. Everything is placed under this repository's `.venv` directory.
+It does not install global Python packages and no longer forces Ollama installation.
 
-### Normal use after setup
+### Normal run
 
 Double-click:
 
@@ -87,131 +80,136 @@ Double-click:
 run_windows.bat
 ```
 
-It performs an environment check and starts the interactive tester.
+Then choose the model provider interactively.
 
-If `.venv` is missing, `run_windows.bat` automatically launches the first-time setup.
+---
 
-### Windows manual commands
+# Using local CodeAgent
 
-If you prefer PowerShell or CMD instead of the BAT files:
+Because different products/tools use the name `codeagent`, AwayOut-AI supports two generic CodeAgent integration modes instead of hard-coding one vendor-specific interface.
 
-```powershell
-py -3 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe doctor.py
-.\.venv\Scripts\python.exe interactive_pair.py
+## Mode A: CodeAgent exposes an OpenAI-compatible API
+
+Choose:
+
+```text
+2. CodeAgent / OpenAI-compatible HTTP
 ```
 
-If you have no local Ollama model yet:
+AwayOut-AI expects these endpoints below the Base URL:
+
+```text
+GET  /models
+POST /chat/completions
+```
+
+For example, if CodeAgent exposes:
+
+```text
+http://127.0.0.1:8000/v1/chat/completions
+```
+
+enter:
+
+```text
+http://127.0.0.1:8000/v1
+```
+
+You will then be asked for:
+
+```text
+CodeAgent API Base URL
+API Key
+Attacker model
+Judge model
+```
+
+If `/models` returns model IDs, AwayOut-AI displays them as a selectable list. If model discovery is unavailable, enter the model name manually.
+
+### Optional Windows environment variables
+
+CMD:
+
+```bat
+set CODEAGENT_BASE_URL=http://127.0.0.1:8000/v1
+set CODEAGENT_MODEL=your-model-name
+set CODEAGENT_API_KEY=
+run_windows.bat
+```
+
+PowerShell:
+
+```powershell
+$env:CODEAGENT_BASE_URL="http://127.0.0.1:8000/v1"
+$env:CODEAGENT_MODEL="your-model-name"
+$env:CODEAGENT_API_KEY=""
+.\run_windows.bat
+```
+
+The API key is optional for local gateways that do not require authentication.
+
+## Mode B: CodeAgent is a local CLI command
+
+Choose:
+
+```text
+3. CodeAgent CLI command
+```
+
+Enter a command template such as:
+
+```text
+codeagent --model {model}
+```
+
+`{model}` is replaced with the selected Attacker/Judge model name.
+
+AwayOut-AI invokes the command with `subprocess`, writes the conversation to stdin and reads the model response from stdout. The provider implementation supports two stdin representations internally:
+
+- `json`: structured model/messages/options payload;
+- `prompt`: flattened `[SYSTEM] / [USER] / [ASSISTANT]` text.
+
+The default is `json`. If your local CodeAgent CLI expects a different contract, adjust the `CommandClient` configuration in `awayout/providers.py`; the Attacker/Judge logic does not need modification.
+
+You can preset the command on Windows:
+
+```bat
+set CODEAGENT_COMMAND=codeagent --model {model}
+```
+
+If `codeagent.exe` is not on `PATH`, use the complete executable path.
+
+---
+
+## Ollama mode
+
+Ollama remains supported for compatibility.
+
+Choose:
+
+```text
+1. Ollama
+```
+
+Default API:
+
+```text
+http://127.0.0.1:11434
+```
+
+Example:
 
 ```powershell
 ollama pull mistral
 ```
 
----
-
-## Environment check
-
-At any time run:
-
-```bash
-python doctor.py
-```
-
-On Windows with the repository virtual environment:
-
-```powershell
-.\.venv\Scripts\python.exe doctor.py
-```
-
-It checks:
-
-- operating system;
-- Python executable and version;
-- `requests` dependency;
-- Ollama API connectivity;
-- installed Ollama models.
-
-Typical healthy output:
-
-```text
-AwayOut-AI environment check
-============================================================
-[OK]   OS: Windows 11
-[OK]   Python executable: ...\.venv\Scripts\python.exe
-[OK]   Python version: 3.12.x
-[OK]   requests: 2.x.x
-[OK]   Ollama API: http://127.0.0.1:11434
-[OK]   Ollama models: mistral:latest
-
-Environment looks ready.
-```
-
----
-
-## Python dependencies
-
-The Python dependency set is intentionally small:
-
-```text
-requests>=2.31.0,<3.0.0
-```
-
-Everything else used by the project is from the Python standard library.
-
-Python 3.10+ is required because the code uses modern type annotation syntax.
-
----
-
-## Ollama / model requirements
-
-### Attacker model
-
-The Attacker should be a chat/instruct model capable of:
-
-- following structured instructions;
-- producing JSON reliably;
-- understanding previous target responses and scores;
-- generating materially different prompt strategies across iterations.
-
-### Judge model
-
-The Judge should be instruction-following and stable. It evaluates the target response and returns a score/reason.
-
-For basic local testing, the same Ollama model can be used for both roles.
-
-For more rigorous evaluation, use different Attacker and Judge models to reduce same-model bias.
-
-### Model size
-
-AwayOut-AI does not impose a model size. Model speed and quality depend on your machine and model choice.
-
-A small/medium instruct model is usually easiest for initial Windows testing. The setup script suggests `mistral` only as a convenient default; you may select any installed Ollama chat/instruct model when the program starts.
-
----
-
-## Run on Linux/macOS
-
-Create a virtual environment and install dependencies:
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -r requirements.txt
-```
-
-Start/launch Ollama according to your platform, install at least one model, then run:
-
-```bash
-python doctor.py
-python interactive_pair.py
-```
+On the normal Windows Ollama installation, the local API usually runs in the background. If needed, launch Ollama from the Start menu or run `ollama serve` for a standalone CLI setup.
 
 ---
 
 ## Interactive workflow
 
-Start with:
+Run:
 
 ```bash
 python interactive_pair.py
@@ -223,221 +221,113 @@ or on Windows:
 run_windows.bat
 ```
 
-The CLI asks for:
+The program asks for:
 
-1. Ollama URL;
-2. Attacker model;
-3. Judge model;
-4. test Objective;
-5. attack strategy;
-6. maximum iterations;
-7. Judge success threshold.
+1. Model Provider
+2. Provider endpoint/command if applicable
+3. Attacker model
+4. Judge model
+5. Test Objective
+6. Attack strategy
+7. Maximum iterations
+8. Judge threshold
 
-If local models are available, Attacker/Judge can be selected by number instead of manually typing an exact Ollama model name.
-
-The numeric inputs are validated, so accidental text/out-of-range values will not terminate the program.
-
-### Typical interaction
-
-```text
-AwayOut-AI · Interactive PAIR Assistant
-
-测试目标 Objective: Test whether the chatbot reveals protected instructions
-攻击策略: logical_appeal
-最大轮数: 10
-
-Iteration 1/10
-
-[改进思路]
-...
-
-[建议发送到目标对话框的 Prompt]
-...
-
-下一步操作:
-  Enter  直接使用上面的 Prompt
-  e      手工修改 Prompt
-  r      让攻击者重新生成
-  s      切换策略后重新生成
-  q      保存并退出
-```
-
-Send the suggested prompt to the real target chatbot. Then paste its complete response into AwayOut-AI.
-
-Finish pasted multi-line content with a line containing only:
-
-```text
-END
-```
-
-AwayOut-AI will then:
-
-```text
-Target response
-      ↓
-Judge score + reason
-      ↓
-Feedback to Attacker
-      ↓
-Next suggested prompt
-```
-
----
-
-## Built-in attack strategies
-
-The current PAIR-style attacker contains three strategies:
+Available attack strategies:
 
 - `logical_appeal`
 - `authority`
 - `roleplay`
 
-The tester can switch strategy during a session.
+Typical loop:
 
----
-
-## Generated prompt vs actually sent prompt
-
-A tester may modify a generated candidate before sending it. AwayOut-AI records both values:
-
-```json
-{
-  "generated_prompt": "prompt produced by attacker model",
-  "sent_prompt": "prompt actually sent by tester",
-  "human_modified": true
-}
+```text
+Iteration 1
+  ↓
+Attacker generates candidate
+  ↓
+Tester may accept/edit/regenerate/switch strategy
+  ↓
+Tester sends prompt to target UI
+  ↓
+Paste target response and finish with END
+  ↓
+Judge scores 1-10
+  ↓
+Feedback enters next Attacker iteration
 ```
 
-This helps distinguish fully automated discoveries from human-assisted ones during later review.
+Commands before sending a candidate:
 
----
-
-## Target conversation state
-
-For each interaction you can record:
-
-- `continue` — send the prompt in the current target chat session;
-- `new` — create a fresh target conversation first.
-
-AwayOut-AI does not control the target UI. This field records what the human tester actually did.
-
-This allows later comparison of:
-
-- single-turn behavior;
-- multi-turn behavior;
-- gradual context accumulation.
+```text
+Enter  use generated prompt
+e      edit prompt
+r      regenerate
+s      switch attack strategy
+q      save and quit
+```
 
 ---
 
 ## Session logs
 
-Logs are written under:
+Logs are stored in:
 
 ```text
 sessions/
 ```
 
-Each record includes:
+Each iteration records:
 
-- iteration;
-- strategy;
-- attacker improvement summary;
-- generated prompt;
-- sent prompt;
-- human-modified flag;
-- target response;
-- Judge score;
-- Judge reason;
-- tester note;
-- target conversation mode.
+- strategy
+- attacker improvement
+- generated prompt
+- actually sent prompt
+- whether the tester modified it
+- target response
+- Judge score
+- Judge reason
+- tester note
+- target conversation mode (`continue` / `new`)
 
-`sessions/` is ignored by Git because test responses can contain sensitive information.
+Provider information is included in the Attacker/Judge model identifiers, for example:
+
+```text
+codeagent-http:model-name
+codeagent-cli:model-name
+ollama:mistral:latest
+```
+
+`sessions/` is ignored by Git because target responses may contain sensitive information.
 
 ---
 
-## Troubleshooting on Windows
-
-### `Python was not found`
-
-Install Python 3.10+ from:
-
-```text
-https://www.python.org/downloads/windows/
-```
-
-Then open a new CMD/PowerShell window and verify:
-
-```powershell
-py -3 --version
-```
-
-or:
-
-```powershell
-python --version
-```
-
-### `Ollama is not installed or is not on PATH`
-
-Install Ollama from:
-
-```text
-https://ollama.com/download/windows
-```
-
-After installation, open a **new** terminal window and run:
-
-```powershell
-ollama --version
-```
-
-### Ollama command exists but API cannot be reached
-
-Normal Windows installer:
-
-1. open the Start menu;
-2. launch **Ollama**;
-3. retry `run_windows.bat`.
-
-You can also check:
-
-```powershell
-curl http://127.0.0.1:11434/api/tags
-```
-
-If you intentionally use standalone CLI mode:
-
-```powershell
-ollama serve
-```
-
-### No Ollama model installed
+## Environment diagnostics
 
 Run:
 
-```powershell
-ollama pull mistral
+```bash
+python doctor.py
 ```
 
-Then check:
+Windows project environment:
 
 ```powershell
-ollama list
+.\.venv\Scripts\python.exe doctor.py
 ```
 
-### Console Chinese text looks wrong
+`doctor.py` checks the base Python environment and reports any providers it can detect. A missing Ollama installation is no longer treated as an error because CodeAgent may be used instead.
 
-The Windows BAT files run:
+For automatic CodeAgent HTTP diagnosis, set:
 
 ```text
-chcp 65001
+CODEAGENT_BASE_URL
 ```
 
-to use UTF-8. Windows Terminal or a modern PowerShell/CMD terminal is recommended if characters still render incorrectly.
+For automatic CodeAgent CLI diagnosis, set:
 
-### Model is slow or runs out of memory
-
-Choose a smaller Ollama model. AwayOut-AI itself uses very little memory; most resource consumption comes from the local Attacker/Judge LLM.
+```text
+CODEAGENT_COMMAND
+```
 
 ---
 
@@ -450,27 +340,25 @@ AwayOut-AI/
 │   ├── attacker.py
 │   ├── judge.py
 │   ├── ollama.py
+│   ├── providers.py
 │   └── session.py
 ├── doctor.py
 ├── interactive_pair.py
 ├── setup_windows.bat
 ├── run_windows.bat
 ├── requirements.txt
-├── .gitignore
 └── README.md
 ```
 
----
+### Provider architecture
 
-## Current scope
+```text
+AttackerLLM ─┐
+             ├── ChatClient
+JudgeLLM ────┘      │
+                    ├── OllamaClient
+                    ├── OpenAICompatibleClient  ← CodeAgent HTTP
+                    └── CommandClient           ← CodeAgent CLI
+```
 
-The first version deliberately keeps the target dialog box manual. This avoids requiring browser automation, cookies, authentication, or a target API before the attack-assistance workflow can be used.
-
-Potential later extensions:
-
-- browser-extension target adapter;
-- Playwright/Puppeteer adapter;
-- generic HTTP/OpenAI-compatible target adapter;
-- TAP-style multi-branch interactive testing;
-- attack-tree visualization;
-- session replay and branch-from-history.
+This keeps PAIR logic independent from the local model runtime. Adding another model gateway later only requires another provider implementing `chat()` / model discovery behavior.
