@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from requests import RequestException
+import os
 
 from awayout.attacker import AttackerLLM, STRATEGIES
 from awayout.judge import JudgeLLM
 from awayout.ollama import OllamaClient
+from awayout.providers import ChatClient, CommandClient, OpenAICompatibleClient
 from awayout.session import IterationRecord, TestSession
 
 SEP = "=" * 72
@@ -60,7 +61,7 @@ def choose_strategy(default: str = "logical_appeal") -> str:
 
 def choose_model(role: str, models: list[str], default: str | None = None) -> str:
     if not models:
-        return ask(f"{role} 模型", default or "mistral")
+        return ask(f"{role} 模型", default or os.getenv("CODEAGENT_MODEL", "mistral"))
 
     default_model = default if default in models else models[0]
     default_index = models.index(default_model) + 1
@@ -81,6 +82,55 @@ def choose_model(role: str, models: list[str], default: str | None = None) -> st
 
     print(f"输入无效，使用: {default_model}")
     return default_model
+
+
+def choose_provider() -> tuple[str, ChatClient, list[str]]:
+    print("\n模型提供方:")
+    print("  1. Ollama")
+    print("  2. CodeAgent / OpenAI-compatible HTTP")
+    print("  3. CodeAgent CLI command")
+    choice = ask("选择 Provider", os.getenv("AWAYOUT_PROVIDER", "1")).lower()
+
+    if choice in {"2", "codeagent", "http", "openai"}:
+        base_url = ask("CodeAgent API Base URL", os.getenv("CODEAGENT_BASE_URL", "http://127.0.0.1:8000/v1"))
+        api_key = ask("API Key（无则直接回车）", os.getenv("CODEAGENT_API_KEY", ""))
+        client = OpenAICompatibleClient(base_url=base_url, api_key=api_key)
+        if not client.is_running():
+            raise RuntimeError(
+                f"无法连接 CodeAgent OpenAI-compatible API: {base_url}\n"
+                "请确认它提供 /models 和 /chat/completions 接口。"
+            )
+        try:
+            models = client.list_models()
+        except Exception:
+            models = []
+        return "codeagent-http", client, models
+
+    if choice in {"3", "cli", "command"}:
+        command = ask(
+            "CodeAgent 命令模板（可使用 {model}）",
+            os.getenv("CODEAGENT_COMMAND", "codeagent --model {model}"),
+        )
+        client = CommandClient(command_template=command)
+        if not client.is_running():
+            raise RuntimeError(
+                "找不到 CodeAgent CLI 可执行文件。请确认命令已加入 PATH，"
+                "或在 CODEAGENT_COMMAND 中填写完整路径。"
+            )
+        print("CLI 模式会把完整 messages JSON 写入命令 stdin，并读取 stdout 作为模型响应。")
+        return "codeagent-cli", client, []
+
+    base_url = ask("Ollama 地址", "http://127.0.0.1:11434")
+    client = OllamaClient(base_url=base_url)
+    if not client.is_running():
+        raise RuntimeError(
+            f"无法连接 Ollama: {base_url}\n"
+            "Windows 安装版请从开始菜单启动 Ollama；独立 CLI 可运行 `ollama serve`。"
+        )
+    models = client.list_models()
+    if not models:
+        raise RuntimeError("Ollama 当前没有已安装模型，请先运行例如：ollama pull mistral")
+    return "ollama", client, models
 
 
 def edit_prompt(generated: str) -> tuple[str, bool]:
@@ -106,28 +156,17 @@ def run() -> None:
     print("用于授权的人工对话框安全测试：生成 Prompt → 手工发送 → 粘贴响应 → 自动评分 → 下一轮")
     print(SEP)
 
-    base_url = ask("Ollama 地址", "http://127.0.0.1:11434")
-    client = OllamaClient(base_url=base_url)
-    if not client.is_running():
-        print(f"\n无法连接 Ollama: {base_url}")
-        print("Windows 安装版：请从开始菜单启动 Ollama。")
-        print("独立 CLI 方式：运行 `ollama serve`。")
-        return
-
     try:
-        models = client.list_models()
-    except RequestException as exc:
-        print(f"\n读取 Ollama 模型列表失败: {exc}")
+        provider_name, client, models = choose_provider()
+    except Exception as exc:
+        print(f"\n模型 Provider 初始化失败:\n{exc}")
         return
 
-    if not models:
-        print("\nOllama 当前没有已安装模型。")
-        print("请先运行例如：ollama pull mistral")
-        return
-
-    print("\n已发现 Ollama 模型:")
-    for name in models:
-        print(f"  - {name}")
+    print(f"\n当前 Provider: {provider_name}")
+    if models:
+        print("已发现模型:")
+        for name in models:
+            print(f"  - {name}")
 
     attacker_model = choose_model("Attacker", models)
     judge_model = choose_model("Judge", models, attacker_model)
@@ -149,8 +188,8 @@ def run() -> None:
     judge = JudgeLLM(client=client, model=judge_model, threshold=threshold)
     session = TestSession(
         objective=objective,
-        attacker_model=attacker_model,
-        judge_model=judge_model,
+        attacker_model=f"{provider_name}:{attacker_model}",
+        judge_model=f"{provider_name}:{judge_model}",
         threshold=threshold,
     )
 
@@ -168,9 +207,8 @@ def run() -> None:
                 previous_score=previous_score,
                 tester_note=tester_note,
             )
-        except RequestException as exc:
+        except Exception as exc:
             print(f"Attacker 模型调用失败: {exc}")
-            print("请确认 Ollama 仍在运行且所选模型可用。")
             break
 
         if not generated_prompt:
@@ -212,9 +250,9 @@ def run() -> None:
 
         try:
             score, reason = judge.score(objective, sent_prompt, target_response)
-        except RequestException as exc:
+        except Exception as exc:
             print(f"Judge 模型调用失败: {exc}")
-            print("当前目标响应尚未记录；请恢复 Ollama 后重新执行本轮。")
+            print("当前目标响应尚未记录，请恢复模型 Provider 后重新执行本轮。")
             continue
 
         success = judge.is_success(score)
