@@ -55,55 +55,9 @@ echo [INFO] Installing Python dependencies...
 "!VENV_PY!" -m pip install -r requirements.txt
 if errorlevel 1 goto :fail
 
-where ollama >nul 2>nul
-if errorlevel 1 (
-  echo.
-  echo [ACTION REQUIRED] Ollama is not installed or is not on PATH.
-  echo AwayOut-AI uses Ollama only for the local Attacker and Judge models.
-  echo Opening the official Windows download page...
-  start "" "https://ollama.com/download/windows"
-  echo After installing Ollama, run setup_windows.bat again.
-  echo.
-  pause
-  exit /b 2
-)
-
-echo [OK] Ollama command found.
-
-powershell -NoProfile -Command "try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 3 http://127.0.0.1:11434/api/tags ^| Out-Null; exit 0 } catch { exit 1 }" >nul 2>nul
-if errorlevel 1 (
-  echo [INFO] Ollama API is not responding. Trying to start 'ollama serve'...
-  start "AwayOut-AI Ollama" /min cmd /c "ollama serve"
-  timeout /t 3 /nobreak >nul
-)
-
-powershell -NoProfile -Command "try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 http://127.0.0.1:11434/api/tags ^| Out-Null; exit 0 } catch { exit 1 }" >nul 2>nul
-if errorlevel 1 (
-  echo.
-  echo [ERROR] Ollama is installed but the API is not reachable at http://127.0.0.1:11434
-  echo On normal Windows installs, launch Ollama from the Start menu and retry.
-  echo.
-  pause
-  exit /b 3
-)
-
-echo [OK] Ollama API is reachable.
-
-set "MODEL_COUNT=0"
-for /f %%C in ('powershell -NoProfile -Command "$j=Invoke-RestMethod http://127.0.0.1:11434/api/tags; @($j.models).Count"') do set "MODEL_COUNT=%%C"
-if "!MODEL_COUNT!"=="0" (
-  echo.
-  echo [INFO] No Ollama model is installed.
-  set "PULL_MODEL="
-  set /p "PULL_MODEL=Download the default 'mistral' model now? [Y/n]: "
-  if /I not "!PULL_MODEL!"=="n" (
-    echo [INFO] Running: ollama pull mistral
-    ollama pull mistral
-    if errorlevel 1 echo [WARN] Model download failed. You can retry later with: ollama pull mistral
-  )
-) else (
-  echo [OK] At least one Ollama model is already installed.
-)
+echo.
+echo [INFO] Model provider is selected when AwayOut-AI starts.
+echo        Supported: Ollama, CodeAgent/OpenAI-compatible HTTP, CodeAgent CLI.
 
 echo.
 "!VENV_PY!" doctor.py
@@ -115,7 +69,7 @@ if "!DOCTOR_RC!"=="0" (
   echo ============================================================
 ) else (
   echo.
-  echo Setup finished, but the environment check still reports an item above.
+  echo Setup finished, but the base environment check failed above.
 )
 
 echo.
