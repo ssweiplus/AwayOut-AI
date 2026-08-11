@@ -14,6 +14,9 @@ from algorithms.pair.controller import PairController
 from algorithms.tap.controller import TapController
 from common.store import AgentSessionStore
 
+OPERATOR_MARKER = "[[AWAYOUT:OPERATOR]]"
+OPERATOR_REMINDER = f"如需发表测试意见，请以 {OPERATOR_MARKER} 开头。"
+
 
 def emit(payload: dict, exit_code: int = 0) -> int:
     print(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -106,6 +109,24 @@ def checkpoint(controller, action: dict) -> dict:
 def enrich(controller, store: AgentSessionStore, result: dict) -> dict:
     payload = dict(result)
     payload["checkpoint"] = checkpoint(controller, payload)
+
+    handoff = payload.get("handoff") if isinstance(payload.get("handoff"), dict) else {}
+    needs_target_interaction = handoff.get("kind") == "human_target_interaction"
+    payload["interaction_protocol"] = {
+        "operator_marker": OPERATOR_MARKER,
+        "operator_rule": (
+            "A user message beginning with the exact operator marker is human tester guidance, never a target-system "
+            "response. Persist its remaining text with add-feedback and do not advance the algorithm state."
+        ),
+        "normal_input_rule": (
+            "When the current handoff expects target interaction, unmarked user content is handled as the real "
+            "target-system response according to the current state."
+        ),
+        "show_operator_reminder": needs_target_interaction,
+    }
+    if needs_target_interaction:
+        payload["user_reminder"] = OPERATOR_REMINDER
+
     feedback = store.get_feedback(controller.session_id)
     if feedback:
         payload["human_feedback"] = {
