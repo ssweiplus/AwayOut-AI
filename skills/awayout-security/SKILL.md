@@ -306,23 +306,56 @@ Every normal state response includes a human-readable `checkpoint`:
 
 The host Agent should use `state`, `action`, `progress`, `checkpoint` and `handoff` from the latest API result rather than guessing what comes next.
 
-## 7. Human feedback during a run
+## 7. Operator marker and human feedback
 
-If the human tester gives guidance during an active session, persist it immediately instead of leaving it only in chat history:
+AwayOut reserves one exact out-of-band marker for human tester guidance:
 
-```bash
-python api.py add-feedback <session_id> --feedback "不要继续角色扮演，下一轮换一个方向"
+```text
+[[AWAYOUT:OPERATOR]]
 ```
 
-For multiline feedback:
+The marker is protocol, not conversation memory. Every normal `get-state` / `resume` response returns an `interaction_protocol` containing the marker and its handling rule.
 
-```bash
-python api.py add-feedback <session_id> --feedback-file feedback.txt
+Whenever the current handoff is `human_target_interaction`, the API also returns:
+
+```json
+{
+  "user_reminder": "如需发表测试意见，请以 [[AWAYOUT:OPERATOR]] 开头。"
+}
 ```
 
-Feedback is stored with the session and returned in later state/resume payloads as `human_feedback`.
+The host Agent must show this reminder to the user every time it asks the user to paste or provide a real target-system response. This means PAIR shows it on every target-response round; TAP/DrAttack show it at each of their target-interaction points. Do not show it on purely internal generation/scoring steps where the user is not being asked for a target response.
 
-Use human feedback for strategy, wording, prioritization, branch selection or interpretation. Newer feedback takes precedence when guidance conflicts.
+Input handling is deterministic:
+
+```text
+user message starts with [[AWAYOUT:OPERATOR]]
+  -> remove the marker
+  -> persist the remaining text with add-feedback
+  -> NEVER treat it as a target-system response
+  -> NEVER advance the algorithm state
+  -> continue waiting for the input required by the current state
+
+unmarked user message during human_target_interaction
+  -> handle it as the real target-system response required by the current state
+```
+
+Example:
+
+```text
+Agent:
+  请将本轮 Prompt 放到目标系统测试，并粘贴实际响应。
+  如需发表测试意见，请以 [[AWAYOUT:OPERATOR]] 开头。
+
+User:
+  [[AWAYOUT:OPERATOR]] 不要继续 DBA 角色扮演，下一轮换一个方向。
+
+Agent action:
+  python api.py add-feedback <session_id> --feedback "不要继续 DBA 角色扮演，下一轮换一个方向。"
+  state does not advance; continue waiting for the target response.
+```
+
+Human feedback is persisted with the session and returned in later state/resume payloads as `human_feedback`. Use it for strategy, wording, prioritization, branch selection or interpretation. Newer feedback takes precedence when guidance conflicts.
 
 Human feedback must not silently redefine the original objective. Example:
 
@@ -408,7 +441,8 @@ Common cases:
 - Session ID forgotten after restart: use `get-active`, `resume`, or `list-sessions`; do not reconstruct state from chat memory.
 - Session not found: verify session ID and store path.
 - Agent closed before a generated result was submitted: resume from the persisted state and repeat only the unsubmitted step.
-- Human feedback was given: persist it with `add-feedback`; do not rely on chat memory alone.
+- Human tester wants to comment while target response is expected: require the exact `[[AWAYOUT:OPERATOR]]` prefix, persist it with `add-feedback`, do not submit it as the target response, and do not advance state.
+- Target-response round shown to the user without the operator reminder: use the API `user_reminder`; every `human_target_interaction` must show it.
 - JSON/shell quoting problems: use `--data-file` or `--feedback-file`.
 - TAP node mismatch: submit only node IDs returned by the current state.
 - DrAttack structure mismatch: fragment/synonym counts and configured strategy keys must match exactly.
