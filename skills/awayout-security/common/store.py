@@ -2,8 +2,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
+from algorithms.drattack.controller import DrAttackController
 from algorithms.pair.controller import PairController
+from algorithms.tap.controller import TapController
+
+Controller = PairController | TapController | DrAttackController
 
 
 class AgentSessionStore:
@@ -17,20 +22,21 @@ class AgentSessionStore:
             raise ValueError("invalid session_id")
         return self.directory / f"{safe}.json"
 
-    def save(self, controller: PairController) -> Path:
+    def save(self, controller: Controller) -> Path:
         path = self._path(controller.session_id)
-        path.write_text(
-            json.dumps(controller.to_dict(), ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        path.write_text(json.dumps(controller.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
         return path
 
-    def load(self, session_id: str) -> PairController:
+    def load(self, session_id: str) -> Controller:
         path = self._path(session_id)
         if not path.is_file():
             raise FileNotFoundError(f"agent session not found: {session_id}")
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
         algorithm = str(data.get("algorithm", "PAIR")).upper()
-        if algorithm != "PAIR":
-            raise ValueError(f"unsupported persisted algorithm: {algorithm}")
-        return PairController.from_dict(data)
+        if algorithm == "PAIR":
+            return PairController.from_dict(data)
+        if algorithm == "TAP":
+            return TapController.from_dict(data)
+        if algorithm in {"DRATTACK", "DR_ATTACK"}:
+            return DrAttackController.from_dict(data)
+        raise ValueError(f"unsupported persisted algorithm: {algorithm}")
