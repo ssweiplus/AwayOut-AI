@@ -12,27 +12,28 @@ It is adapted from the open-source project **Hcxgraphics/JailBreak-AI**:
 
 ---
 
-## 1. Recommended architecture: Agent + deterministic AwayOut Engine
+## 1. Recommended architecture: Skill outside, deterministic algorithms inside
 
-AwayOut-AI now separates language reasoning from workflow control:
+AwayOut-AI is organized around the Agent Skill as the primary entry point:
 
 ```text
 OpenCode / Codex / other Agent
           │
-          │  AwayOut Skill
           ▼
-      agent_api.py
+skills/awayout-security/SKILL.md
           │
           ▼
- Deterministic Controller
+   algorithms/<name>/
+          │
+          ▼
+ deterministic controller
           │
      ┌────┴────┐
      ▼         ▼
- Session      Tree
- State        Record
+   common     state/tree
 ```
 
-The **Agent does not choose the workflow order**. AwayOut code owns:
+The **Agent does not choose the workflow order**. The algorithm controller owns:
 
 - algorithm state transitions;
 - iteration limits;
@@ -47,7 +48,34 @@ If the Agent calls a step out of order, AwayOut rejects it.
 
 ---
 
-## 2. Algorithms
+## 2. Skill structure
+
+```text
+skills/
+└── awayout-security/
+    ├── SKILL.md                 # top-level Agent instructions
+    ├── api.py                   # real Agent API implementation
+    ├── common/
+    │   └── store.py             # deterministic session persistence
+    └── algorithms/
+        ├── pair/
+        │   ├── SKILL.md         # PAIR-specific Agent instructions
+        │   └── controller.py    # deterministic PAIR state machine
+        ├── tap/
+        │   └── SKILL.md         # reserved until controller is implemented
+        └── drattack/
+            └── SKILL.md         # reserved until controller is implemented
+```
+
+The root-level `agent_api.py` is only a compatibility wrapper that forwards execution to:
+
+```text
+skills/awayout-security/api.py
+```
+
+---
+
+## 3. Algorithms
 
 ```text
 1. PAIR     - feedback-driven iterative refinement      [Agent Mode available]
@@ -71,7 +99,7 @@ TAP and DrAttack remain reserved until their deterministic controllers are imple
 
 ---
 
-## 3. Agent Mode
+## 4. Agent Mode
 
 The Agent-facing skill is:
 
@@ -79,7 +107,7 @@ The Agent-facing skill is:
 skills/awayout-security/SKILL.md
 ```
 
-The high-level tool entry is:
+The high-level tool entry remains:
 
 ```text
 agent_api.py
@@ -139,7 +167,7 @@ This directory is ignored by Git.
 
 ---
 
-## 4. Standalone Mode
+## 5. Standalone Mode
 
 The existing Python-driven PAIR implementation is retained for compatibility.
 
@@ -161,7 +189,7 @@ Standalone PAIR still uses the existing `AttackerLLM` / `JudgeLLM` path. Agent M
 
 ---
 
-## 5. CodeAgent integration for Standalone Mode
+## 6. CodeAgent integration for Standalone Mode
 
 CodeAgent has exactly one supported integration mode: **Python Connector**.
 
@@ -183,27 +211,11 @@ def invoke(message: str, model="", temperature=0.7, max_tokens=1200):
 
 AwayOut internally owns multi-message chat history. `PythonConnectorClient` converts it to one string before calling your connector.
 
-On failure:
-
-```python
-return {
-    "success": False,
-    "result": "error message"
-}
-```
-
-Optional model discovery:
-
-```python
-def list_models():
-    return ["model-a", "model-b"]
-```
-
 For the full contract, see `CODEAGENT_CONNECTOR.md`.
 
 ---
 
-## 6. Windows installation
+## 7. Windows installation
 
 Requirements:
 
@@ -256,61 +268,24 @@ python doctor.py
 
 ---
 
-## 7. Standalone model providers
-
-Standalone PAIR currently offers:
+## 8. Responsibility boundary
 
 ```text
-1. CodeAgent Python Connector
-2. Ollama
-```
+Skill
+- tells the Agent how to use AwayOut
+- tells the Agent which algorithm-specific instructions to follow
+- tells the Agent to obey returned state/action
 
-Agent Mode does not require AwayOut itself to call an Attacker/Judge model; the external Agent performs those language steps while the Controller enforces the workflow.
-
----
-
-## 8. Project layout
-
-```text
-AwayOut-AI/
-├── awayout/
-│   ├── controllers/
-│   │   ├── __init__.py
-│   │   └── pair.py            # deterministic PAIR state machine
-│   ├── agent_store.py         # Agent Mode persistence
-│   ├── attacker.py            # standalone engine
-│   ├── judge.py               # standalone engine
-│   ├── ollama.py
-│   ├── providers.py
-│   ├── seeds.py               # reserved extension point
-│   └── session.py             # standalone session format
-├── skills/
-│   └── awayout-security/
-│       └── SKILL.md           # Agent instructions
-├── agent_api.py               # high-level Agent tool entry
-├── main.py                    # standalone unified entry
-├── interactive_pair.py        # standalone PAIR implementation
-├── codeagent_connector.py
-├── CODEAGENT_CONNECTOR.md
-├── doctor.py
-├── setup_windows.bat
-├── run_windows.bat
-├── requirements.txt
-└── README.md
-```
-
----
-
-## 9. Responsibility boundary
-
-```text
-Code / Controller
+Algorithm Controller
 - what step happens next
 - whether a transition is legal
 - thresholds and limits
-- persistence
-- tree structure
 - stop conditions
+
+Common deterministic code
+- persistence
+- session loading/saving
+- shared state utilities
 
 Agent / LLM
 - candidate wording
@@ -324,24 +299,64 @@ The design goal is to keep non-deterministic language work in the Agent while pr
 
 ---
 
+## 9. Full project layout
+
+```text
+AwayOut-AI/
+├── skills/
+│   └── awayout-security/
+│       ├── SKILL.md
+│       ├── api.py
+│       ├── common/
+│       │   └── store.py
+│       └── algorithms/
+│           ├── pair/
+│           │   ├── SKILL.md
+│           │   └── controller.py
+│           ├── tap/
+│           │   └── SKILL.md
+│           └── drattack/
+│               └── SKILL.md
+├── awayout/
+│   ├── attacker.py            # standalone engine
+│   ├── judge.py               # standalone engine
+│   ├── ollama.py
+│   ├── providers.py
+│   ├── seeds.py               # reserved extension point
+│   └── session.py             # standalone session format
+├── agent_api.py               # compatibility wrapper -> skill api.py
+├── main.py                    # standalone unified entry
+├── interactive_pair.py        # standalone PAIR implementation
+├── codeagent_connector.py
+├── CODEAGENT_CONNECTOR.md
+├── doctor.py
+├── setup_windows.bat
+├── run_windows.bat
+├── requirements.txt
+└── README.md
+```
+
+---
+
 ## 10. Current scope
 
 Implemented now:
 
+- skill-centric Agent architecture;
 - Agent-friendly high-level API;
-- deterministic PAIR controller;
+- deterministic PAIR controller inside the Skill package;
 - enforced state transitions;
-- persistent Agent sessions;
+- persistent Agent sessions under Skill common code;
 - deterministic tree and summary output;
-- Agent skill instructions;
+- algorithm-specific Skill instructions;
 - existing standalone PAIR retained;
 - CodeAgent Python Connector retained for standalone mode;
 - Windows / uv / Conda setup support.
 
 Reserved next:
 
-- deterministic TAP controller;
-- deterministic DrAttack controller;
+- deterministic TAP controller under `skills/awayout-security/algorithms/tap/`;
+- deterministic DrAttack controller under `skills/awayout-security/algorithms/drattack/`;
 - richer branching/tree visualization;
-- optional MCP wrapper around the stable `agent_api.py` operations;
+- optional MCP wrapper around the stable Agent API operations;
 - optional curated Seed Prompt library.
