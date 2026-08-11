@@ -100,7 +100,7 @@ set CODEAGENT_CONNECTOR=D:\private\my_codeagent_connector.py
 
 ---
 
-## 2. Windows: download and run
+## 2. Windows installation
 
 ### Requirements
 
@@ -118,9 +118,17 @@ requests>=2.31.0,<3.0.0
 
 Ollama is optional. You do not need Ollama when using your CodeAgent connector.
 
-### Python environment priority
+### Option A: automatic setup
 
-The Windows BAT scripts use this priority:
+Run once after downloading/cloning the repository:
+
+```bat
+setup_windows.bat
+```
+
+The script reuses a suitable environment when possible and installs project dependencies.
+
+Environment priority:
 
 ```text
 1. currently active Conda environment
@@ -128,78 +136,79 @@ The Windows BAT scripts use this priority:
 3. create a new project .venv
 ```
 
-So Conda users can keep their existing workflow. If a Conda environment is active, AwayOut-AI uses that environment directly and installs project dependencies into it.
+If `uv` is available, the setup script can use `uv pip` to install dependencies into `.venv` without requiring `pip` inside that environment.
 
-Example:
+### Option B: manual installation with uv (recommended for uv users)
 
-```bat
-conda activate awayout
-setup_windows.bat
-run_windows.bat
-```
-
-The active Conda environment must use Python 3.10 or newer.
-
-If you do **not** want AwayOut-AI dependencies installed into your current Conda environment, deactivate Conda first:
+Run these commands only for the first setup, or when recreating the environment:
 
 ```bat
-conda deactivate
-setup_windows.bat
+cd D:\path\to\AwayOut-AI
+uv venv .venv
+uv pip install --python .venv\Scripts\python.exe -r requirements.txt
+.venv\Scripts\python.exe doctor.py
 ```
 
-Then the setup script creates and uses the repository-local `.venv` instead.
+If `.venv` already exists, skip:
 
-### First run
-
-Download/clone the repository and run:
-
-```text
-setup_windows.bat
+```bat
+uv venv .venv
 ```
 
-It will:
+You do **not** need to activate `.venv`; directly calling `.venv\Scripts\python.exe` is sufficient.
 
-- reuse the active Conda Python when `CONDA_PREFIX` is present and valid;
-- otherwise reuse an existing `.venv`;
-- otherwise find `py` / `python` and create `.venv`;
-- verify Python 3.10+;
-- install/update required Python packages in the selected environment;
-- run `doctor.py`.
+### Option C: manual installation with standard Python
 
-### Normal run
-
-Run:
-
-```text
-run_windows.bat
+```bat
+cd D:\path\to\AwayOut-AI
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements.txt
+.venv\Scripts\python.exe doctor.py
 ```
 
-If a Conda environment is currently active, it is preferred over `.venv`. Otherwise `.venv` is used when available.
-
-If neither is available, `run_windows.bat` automatically calls `setup_windows.bat`.
-
-### Manual Windows commands with `.venv`
-
-```powershell
-py -3 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe doctor.py
-.\.venv\Scripts\python.exe interactive_pair.py
-```
-
-### Manual Windows commands with Conda
+### Option D: manual installation with Conda
 
 ```bat
 conda create -n awayout python=3.11 -y
 conda activate awayout
 python -m pip install -r requirements.txt
 python doctor.py
-python interactive_pair.py
 ```
 
 ---
 
-## 3. Model providers
+## 3. Running AwayOut-AI
+
+After installation is complete, normal startup does **not** require reinstalling dependencies.
+
+### Option A: Windows launcher
+
+```bat
+run_windows.bat
+```
+
+### Option B: run directly with `.venv`
+
+```bat
+.venv\Scripts\python.exe interactive_pair.py
+```
+
+### Option C: run in an activated Conda environment
+
+```bat
+conda activate awayout
+python interactive_pair.py
+```
+
+For most uv users, the normal daily command is simply:
+
+```bat
+.venv\Scripts\python.exe interactive_pair.py
+```
+
+---
+
+## 4. Model providers
 
 At startup AwayOut-AI offers:
 
@@ -261,12 +270,18 @@ AwayOut-AI writes the conversation to stdin and reads stdout as the model respon
 
 ---
 
-## 4. Complete first-test walkthrough
+## 5. Complete first-test walkthrough
 
-Run:
+Start AwayOut-AI:
 
 ```text
 run_windows.bat
+```
+
+or:
+
+```text
+.venv\Scripts\python.exe interactive_pair.py
 ```
 
 Then:
@@ -315,7 +330,7 @@ For target conversation state, choose:
 
 ---
 
-## 5. Built-in attack strategies
+## 6. Built-in attack strategies
 
 Current PAIR-style strategies:
 
@@ -327,7 +342,7 @@ The tester may switch strategy during a session.
 
 ---
 
-## 6. Session logs and review
+## 7. Session logs and review
 
 Logs are written to:
 
@@ -353,7 +368,7 @@ Each iteration records:
 
 ---
 
-## 7. Environment diagnostics
+## 8. Environment diagnostics
 
 Run with the currently selected Python environment:
 
@@ -371,25 +386,24 @@ For `.venv` on Windows:
 
 ---
 
-## 8. Troubleshooting
+## 9. Troubleshooting
+
+### uv-created `.venv` has no pip
+
+This can be normal. Use:
+
+```bat
+uv pip install --python .venv\Scripts\python.exe -r requirements.txt
+```
+
+You do not need to install pip into the uv-created environment just to use AwayOut-AI.
 
 ### Conda is installed but BAT still uses `.venv`
 
-The BAT scripts only prefer Conda when a Conda environment is **currently activated** and `%CONDA_PREFIX%\python.exe` exists.
-
-Run:
+The BAT scripts only prefer Conda when a Conda environment is currently activated and `%CONDA_PREFIX%\python.exe` exists.
 
 ```bat
 conda activate your-env
-run_windows.bat
-```
-
-### I activated the wrong Conda environment
-
-The BAT scripts intentionally trust the currently active environment. Activate the desired one before running them:
-
-```bat
-conda activate awayout
 run_windows.bat
 ```
 
@@ -397,16 +411,16 @@ run_windows.bat
 
 Install that SDK into whichever environment the launcher is using.
 
-For active Conda:
+With uv:
+
+```bat
+uv pip install --python .venv\Scripts\python.exe your-package
+```
+
+With active Conda:
 
 ```bat
 python -m pip install your-package
-```
-
-For `.venv`:
-
-```powershell
-.\.venv\Scripts\python.exe -m pip install your-package
 ```
 
 ### Chinese text looks wrong in Windows console
@@ -415,7 +429,7 @@ The BAT scripts use UTF-8 (`chcp 65001`). Windows Terminal is recommended if ren
 
 ---
 
-## 9. Project layout
+## 10. Project layout
 
 ```text
 AwayOut-AI/
@@ -446,7 +460,7 @@ Seed Prompt support is currently **reserved only**. The current CLI does not loa
 
 ---
 
-## 10. Current scope
+## 11. Current scope
 
 This version intentionally keeps the target chatbot manual. AwayOut-AI does not automate browser authentication, cookies, target APIs, or UI interaction.
 
