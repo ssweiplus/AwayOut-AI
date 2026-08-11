@@ -5,7 +5,7 @@ import os
 from awayout.attacker import AttackerLLM, STRATEGIES
 from awayout.judge import JudgeLLM
 from awayout.ollama import OllamaClient
-from awayout.providers import ChatClient, CommandClient, OpenAICompatibleClient
+from awayout.providers import ChatClient, CommandClient, OpenAICompatibleClient, PythonConnectorClient
 from awayout.session import IterationRecord, TestSession
 
 SEP = "=" * 72
@@ -61,7 +61,7 @@ def choose_strategy(default: str = "logical_appeal") -> str:
 
 def choose_model(role: str, models: list[str], default: str | None = None) -> str:
     if not models:
-        return ask(f"{role} 模型", default or os.getenv("CODEAGENT_MODEL", "mistral"))
+        return ask(f"{role} 模型", default or os.getenv("CODEAGENT_MODEL", "default"))
 
     default_model = default if default in models else models[0]
     default_index = models.index(default_model) + 1
@@ -86,12 +86,30 @@ def choose_model(role: str, models: list[str], default: str | None = None) -> st
 
 def choose_provider() -> tuple[str, ChatClient, list[str]]:
     print("\n模型提供方:")
-    print("  1. Ollama")
-    print("  2. CodeAgent / OpenAI-compatible HTTP")
-    print("  3. CodeAgent CLI command")
+    print("  1. CodeAgent Python Connector（推荐，自行实现脚本）")
+    print("  2. Ollama")
+    print("  3. CodeAgent / OpenAI-compatible HTTP")
+    print("  4. CodeAgent CLI command")
     choice = ask("选择 Provider", os.getenv("AWAYOUT_PROVIDER", "1")).lower()
 
-    if choice in {"2", "codeagent", "http", "openai"}:
+    if choice in {"1", "connector", "python"}:
+        connector_path = ask(
+            "Connector Python 文件",
+            os.getenv("CODEAGENT_CONNECTOR", "codeagent_connector.py"),
+        )
+        client = PythonConnectorClient(connector_path)
+        if not client.is_running():
+            raise RuntimeError(
+                f"无法加载 Connector: {connector_path}\n"
+                "请确认文件存在，并定义 invoke(...) -> {'success': bool, 'result': ...}。"
+            )
+        try:
+            models = client.list_models()
+        except Exception as exc:
+            raise RuntimeError(f"Connector list_models() 调用失败: {exc}") from exc
+        return "codeagent-connector", client, models
+
+    if choice in {"3", "codeagent", "http", "openai"}:
         base_url = ask("CodeAgent API Base URL", os.getenv("CODEAGENT_BASE_URL", "http://127.0.0.1:8000/v1"))
         api_key = ask("API Key（无则直接回车）", os.getenv("CODEAGENT_API_KEY", ""))
         client = OpenAICompatibleClient(base_url=base_url, api_key=api_key)
@@ -106,7 +124,7 @@ def choose_provider() -> tuple[str, ChatClient, list[str]]:
             models = []
         return "codeagent-http", client, models
 
-    if choice in {"3", "cli", "command"}:
+    if choice in {"4", "cli", "command"}:
         command = ask(
             "CodeAgent 命令模板（可使用 {model}）",
             os.getenv("CODEAGENT_COMMAND", "codeagent --model {model}"),
@@ -117,7 +135,6 @@ def choose_provider() -> tuple[str, ChatClient, list[str]]:
                 "找不到 CodeAgent CLI 可执行文件。请确认命令已加入 PATH，"
                 "或在 CODEAGENT_COMMAND 中填写完整路径。"
             )
-        print("CLI 模式会把完整 messages JSON 写入命令 stdin，并读取 stdout 作为模型响应。")
         return "codeagent-cli", client, []
 
     base_url = ask("Ollama 地址", "http://127.0.0.1:11434")
