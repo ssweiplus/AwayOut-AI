@@ -78,6 +78,37 @@ if /I "!ENV_MODE!"=="conda" (
   echo [INFO] Dependencies will be installed into the project-local .venv environment.
 )
 
+echo [INFO] Checking pip...
+%PY_CMD% -m pip --version >nul 2>nul
+if errorlevel 1 (
+  echo [WARN] pip is missing in the selected Python environment.
+  echo [INFO] Trying to repair pip with ensurepip...
+  %PY_CMD% -m ensurepip --upgrade
+  if errorlevel 1 (
+    echo.
+    echo [ERROR] pip could not be repaired automatically.
+    if /I "!ENV_MODE!"=="venv" (
+      echo Delete the broken .venv folder and run setup_windows.bat again:
+      echo   rmdir /s /q .venv
+      echo   setup_windows.bat
+    ) else (
+      echo Repair pip in the active Conda environment, for example:
+      echo   conda install pip
+    )
+    echo.
+    pause
+    exit /b 1
+  )
+)
+
+%PY_CMD% -m pip --version >nul 2>nul
+if errorlevel 1 (
+  echo [ERROR] pip is still unavailable after repair.
+  pause
+  exit /b 1
+)
+
+echo [OK] pip is available.
 echo [INFO] Updating pip...
 %PY_CMD% -m pip install --upgrade pip
 if errorlevel 1 goto :fail
