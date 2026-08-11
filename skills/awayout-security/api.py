@@ -48,12 +48,30 @@ def read_json(value: str | None, file_path: str | None) -> dict:
 def cmd_start(args: argparse.Namespace, store: AgentSessionStore) -> int:
     algorithm = args.algorithm.upper().replace("_", "")
     if algorithm == "PAIR":
-        controller = PairController(objective=args.objective, max_iterations=args.max_iterations, threshold=args.threshold, strategy=args.strategy)
+        controller = PairController(
+            objective=args.objective,
+            max_iterations=args.max_iterations,
+            threshold=args.threshold,
+            strategy=args.strategy,
+            stop_policy=args.stop_policy,
+        )
     elif algorithm == "TAP":
-        controller = TapController(objective=args.objective, branch_factor=args.branch_factor, max_depth=args.max_depth, width=args.width, threshold=args.threshold)
+        controller = TapController(
+            objective=args.objective,
+            branch_factor=args.branch_factor,
+            max_depth=args.max_depth,
+            width=args.width,
+            threshold=args.threshold,
+        )
     elif algorithm == "DRATTACK":
         strategies = [x.strip() for x in args.strategies.split(",") if x.strip()]
-        controller = DrAttackController(objective=args.objective, threshold=args.threshold, top_k_synonyms=args.top_k_synonyms, strategies=strategies, stop_on_success=args.stop_on_success)
+        controller = DrAttackController(
+            objective=args.objective,
+            threshold=args.threshold,
+            top_k_synonyms=args.top_k_synonyms,
+            strategies=strategies,
+            stop_on_success=args.stop_on_success,
+        )
     else:
         return fail(f"unsupported algorithm: {args.algorithm}. Available: PAIR, TAP, DrAttack")
     store.save(controller)
@@ -165,6 +183,12 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--threshold", type=int, default=7)
     start.add_argument("--max-iterations", type=int, default=10)
     start.add_argument("--strategy", default="logical_appeal")
+    start.add_argument(
+        "--stop-policy",
+        choices=("first_success", "exhaust_budget"),
+        default="exhaust_budget",
+        help="PAIR only: stop at first threshold hit, or continue until max iterations",
+    )
     start.add_argument("--branch-factor", type=int, default=2)
     start.add_argument("--max-depth", type=int, default=5)
     start.add_argument("--width", type=int, default=2)
@@ -172,19 +196,48 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--strategies", default="icl_structured,icl_unstructured,word_game,icl_demo1,icl_demo2")
     start.add_argument("--stop-on-success", action="store_true")
 
-    candidate = sub.add_parser("submit-candidate"); candidate.add_argument("session_id"); candidate.add_argument("--prompt"); candidate.add_argument("--prompt-file"); candidate.add_argument("--strategy", default=None)
-    response = sub.add_parser("submit-response"); response.add_argument("session_id"); response.add_argument("--response"); response.add_argument("--response-file")
-    judgement = sub.add_parser("submit-judgement"); judgement.add_argument("session_id"); judgement.add_argument("--score", type=int, required=True); judgement.add_argument("--reason"); judgement.add_argument("--reason-file")
-    result = sub.add_parser("submit-result"); result.add_argument("session_id"); result.add_argument("--data"); result.add_argument("--data-file")
+    candidate = sub.add_parser("submit-candidate")
+    candidate.add_argument("session_id")
+    candidate.add_argument("--prompt")
+    candidate.add_argument("--prompt-file")
+    candidate.add_argument("--strategy", default=None)
+
+    response = sub.add_parser("submit-response")
+    response.add_argument("session_id")
+    response.add_argument("--response")
+    response.add_argument("--response-file")
+
+    judgement = sub.add_parser("submit-judgement")
+    judgement.add_argument("session_id")
+    judgement.add_argument("--score", type=int, required=True)
+    judgement.add_argument("--reason")
+    judgement.add_argument("--reason-file")
+
+    result = sub.add_parser("submit-result")
+    result.add_argument("session_id")
+    result.add_argument("--data")
+    result.add_argument("--data-file")
 
     for name in ("get-state", "get-tree", "get-summary"):
-        item = sub.add_parser(name); item.add_argument("session_id")
+        item = sub.add_parser(name)
+        item.add_argument("session_id")
     return parser
 
 
 def main() -> int:
-    parser = build_parser(); args = parser.parse_args(); store = AgentSessionStore(args.store)
-    handlers = {"start-test": cmd_start, "submit-candidate": cmd_candidate, "submit-response": cmd_response, "submit-judgement": cmd_judgement, "submit-result": cmd_result, "get-state": cmd_state, "get-tree": cmd_tree, "get-summary": cmd_summary}
+    parser = build_parser()
+    args = parser.parse_args()
+    store = AgentSessionStore(args.store)
+    handlers = {
+        "start-test": cmd_start,
+        "submit-candidate": cmd_candidate,
+        "submit-response": cmd_response,
+        "submit-judgement": cmd_judgement,
+        "submit-result": cmd_result,
+        "get-state": cmd_state,
+        "get-tree": cmd_tree,
+        "get-summary": cmd_summary,
+    }
     try:
         return handlers[args.command](args, store)
     except Exception as exc:
