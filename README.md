@@ -1,6 +1,6 @@
 # AwayOut-AI
 
-AwayOut-AI is a human-in-the-loop assistant for **authorized chatbot security testing**.
+AwayOut-AI is an agent-friendly toolkit for **authorized chatbot security testing**.
 
 It is adapted from the open-source project **Hcxgraphics/JailBreak-AI**:
 
@@ -8,29 +8,162 @@ It is adapted from the open-source project **Hcxgraphics/JailBreak-AI**:
 - Upstream license: MIT
 - Upstream methods: DrAttack, PAIR, TAP, LLM-as-Judge
 
-AwayOut-AI changes the usage model for real enterprise testing: the tester manually operates the target chatbot, while Attacker/Judge models generate candidates, evaluate responses, and drive the next iteration.
-
 > Use only on systems you are authorized to test.
 
 ---
 
-## 1. Algorithms
+## 1. Recommended architecture: Agent + deterministic AwayOut Engine
 
-AwayOut-AI keeps the three-algorithm structure of the upstream project:
+AwayOut-AI now separates language reasoning from workflow control:
 
 ```text
-1. PAIR     - feedback-driven iterative refinement      [available]
+OpenCode / Codex / other Agent
+          │
+          │  AwayOut Skill
+          ▼
+      agent_api.py
+          │
+          ▼
+ Deterministic Controller
+          │
+     ┌────┴────┐
+     ▼         ▼
+ Session      Tree
+ State        Record
+```
+
+The **Agent does not choose the workflow order**. AwayOut code owns:
+
+- algorithm state transitions;
+- iteration limits;
+- success thresholds;
+- allowed next actions;
+- session persistence;
+- tree/summary generation.
+
+The Agent only handles language-heavy steps such as candidate wording, semantic analysis, judgement reasoning, and presenting results to the user.
+
+If the Agent calls a step out of order, AwayOut rejects it.
+
+---
+
+## 2. Algorithms
+
+```text
+1. PAIR     - feedback-driven iterative refinement      [Agent Mode available]
 2. TAP      - Tree of Attacks with Pruning             [reserved]
 3. DrAttack - prompt decomposition and reconstruction  [reserved]
 ```
 
-`main.py` is the unified entry point. The current runnable implementation is PAIR; TAP and DrAttack are reserved for later integration.
+PAIR Agent Mode is implemented as this fixed state machine:
+
+```text
+NEED_CANDIDATE
+      ↓
+WAIT_TARGET_RESPONSE
+      ↓
+NEED_JUDGEMENT
+      ↓
+DONE or NEED_CANDIDATE
+```
+
+TAP and DrAttack remain reserved until their deterministic controllers are implemented. The Agent must not emulate them by inventing its own workflow.
 
 ---
 
-## 2. CodeAgent integration
+## 3. Agent Mode
 
-**CodeAgent has exactly one supported integration mode: Python Connector.**
+The Agent-facing skill is:
+
+```text
+skills/awayout-security/SKILL.md
+```
+
+The high-level tool entry is:
+
+```text
+agent_api.py
+```
+
+### Start a PAIR test
+
+```bat
+.venv\Scripts\python.exe agent_api.py start-test --algorithm PAIR --objective "<objective>"
+```
+
+The command returns JSON with:
+
+```text
+session_id
+state
+action
+```
+
+The Agent must obey the returned `state` and `action`.
+
+### Submit a generated candidate
+
+```bat
+.venv\Scripts\python.exe agent_api.py submit-candidate <session_id> --prompt "<candidate>" --strategy "logical_appeal"
+```
+
+### Submit the real target response
+
+```bat
+.venv\Scripts\python.exe agent_api.py submit-response <session_id> --response "<target response>"
+```
+
+### Submit judgement
+
+```bat
+.venv\Scripts\python.exe agent_api.py submit-judgement <session_id> --score 5 --reason "<reason>"
+```
+
+The controller decides whether another iteration is allowed or the test is finished.
+
+### Inspect state / tree / summary
+
+```bat
+.venv\Scripts\python.exe agent_api.py get-state <session_id>
+.venv\Scripts\python.exe agent_api.py get-tree <session_id>
+.venv\Scripts\python.exe agent_api.py get-summary <session_id>
+```
+
+Agent-mode state is stored under:
+
+```text
+.awayout-agent/
+```
+
+This directory is ignored by Git.
+
+---
+
+## 4. Standalone Mode
+
+The existing Python-driven PAIR implementation is retained for compatibility.
+
+Unified standalone entry:
+
+```bat
+.venv\Scripts\python.exe main.py
+```
+
+or:
+
+```bat
+run_windows.bat
+```
+
+`main.py` keeps the three-algorithm menu. PAIR is runnable; TAP and DrAttack are currently reserved.
+
+Standalone PAIR still uses the existing `AttackerLLM` / `JudgeLLM` path. Agent Mode is the recommended direction when using OpenCode/Codex-style agents.
+
+---
+
+## 5. CodeAgent integration for Standalone Mode
+
+CodeAgent has exactly one supported integration mode: **Python Connector**.
 
 Default file:
 
@@ -38,15 +171,17 @@ Default file:
 codeagent_connector.py
 ```
 
-Implement:
+Connector input is a single string:
 
 ```python
-def invoke(messages, model="", temperature=0.7, max_tokens=1200):
+def invoke(message: str, model="", temperature=0.7, max_tokens=1200):
     return {
         "success": True,
         "result": "model output"
     }
 ```
+
+AwayOut internally owns multi-message chat history. `PythonConnectorClient` converts it to one string before calling your connector.
 
 On failure:
 
@@ -64,29 +199,18 @@ def list_models():
     return ["model-a", "model-b"]
 ```
 
-The connector may internally call your own SDK, Python module, subprocess, RPC client, HTTP client, or proprietary CodeAgent integration. AwayOut-AI does not expose separate CodeAgent HTTP or CLI provider modes.
-
 For the full contract, see `CODEAGENT_CONNECTOR.md`.
-
-Do not commit secrets into the tracked connector template. Prefer environment variables or an external connector file:
-
-```bat
-set CODEAGENT_CONNECTOR=D:\private\my_codeagent_connector.py
-```
 
 ---
 
-## 3. Windows installation
+## 6. Windows installation
 
 Requirements:
 
 - Windows 10/11
 - Python 3.10+
-- one model provider: CodeAgent Connector or Ollama
 
 ### Automatic setup
-
-Run once:
 
 ```bat
 setup_windows.bat
@@ -116,7 +240,6 @@ If `.venv` already exists, skip `uv venv .venv`.
 ### Manual installation with standard Python
 
 ```bat
-cd D:\path\to\AwayOut-AI
 python -m venv .venv
 .venv\Scripts\python.exe -m pip install -r requirements.txt
 .venv\Scripts\python.exe doctor.py
@@ -133,159 +256,41 @@ python doctor.py
 
 ---
 
-## 4. Running AwayOut-AI
+## 7. Standalone model providers
 
-After installation, do not reinstall dependencies every time.
-
-Windows launcher:
-
-```bat
-run_windows.bat
-```
-
-Direct run with `.venv`:
-
-```bat
-.venv\Scripts\python.exe main.py
-```
-
-Activated Conda environment:
-
-```bat
-conda activate awayout
-python main.py
-```
-
-`main.py` first asks which algorithm to use.
-
----
-
-## 5. Model providers
-
-The PAIR runtime currently offers only:
+Standalone PAIR currently offers:
 
 ```text
 1. CodeAgent Python Connector
 2. Ollama
 ```
 
-### CodeAgent Python Connector
-
-Default:
-
-```text
-codeagent_connector.py
-```
-
-Custom path:
-
-```bat
-set CODEAGENT_CONNECTOR=D:\path\to\connector.py
-```
-
-### Ollama
-
-Default API:
-
-```text
-http://127.0.0.1:11434
-```
-
-Example:
-
-```bat
-ollama pull mistral
-```
+Agent Mode does not require AwayOut itself to call an Attacker/Judge model; the external Agent performs those language steps while the Controller enforces the workflow.
 
 ---
 
-## 6. PAIR workflow
-
-Current PAIR flow:
-
-```text
-Objective
-   ↓
-Attacker LLM
-   ↓
-Suggested test prompt
-   ↓
-Human sends prompt to target chatbot
-   ↓
-Human pastes target response back
-   ↓
-Judge LLM
-   ↓
-Score + feedback
-   ↓
-Next test prompt
-```
-
-Before sending a generated prompt:
-
-```text
-Enter  use generated prompt
-e      edit prompt
-r      regenerate
-s      switch strategy
-q      save and quit
-```
-
-Target conversation mode:
-
-- `continue` - continue the current target chat
-- `new` - start a new target chat
-
-Judge success threshold defaults to `7/10`.
-
----
-
-## 7. Session logs
-
-Logs are saved to:
-
-```text
-sessions/
-```
-
-Each iteration records the generated prompt, actual sent prompt, target response, Judge score/reason, strategy, human modification flag, tester note, and target conversation mode.
-
-`sessions/` is ignored by Git because target responses may contain sensitive data.
-
----
-
-## 8. Environment diagnostics
-
-Run:
-
-```bat
-.venv\Scripts\python.exe doctor.py
-```
-
-or in an activated Conda environment:
-
-```bat
-python doctor.py
-```
-
-`doctor.py` checks Python, dependencies, CodeAgent Connector loadability, and Ollama availability. It does not invoke the CodeAgent model during the health check.
-
----
-
-## 9. Project layout
+## 8. Project layout
 
 ```text
 AwayOut-AI/
 ├── awayout/
-│   ├── attacker.py
-│   ├── judge.py
+│   ├── controllers/
+│   │   ├── __init__.py
+│   │   └── pair.py            # deterministic PAIR state machine
+│   ├── agent_store.py         # Agent Mode persistence
+│   ├── attacker.py            # standalone engine
+│   ├── judge.py               # standalone engine
 │   ├── ollama.py
-│   ├── providers.py          # ChatClient + PythonConnectorClient
-│   ├── seeds.py              # reserved extension point
-│   └── session.py
-├── main.py                   # unified three-algorithm entry point
-├── interactive_pair.py       # PAIR implementation
-├── codeagent_connector.py    # user-editable CodeAgent connector
+│   ├── providers.py
+│   ├── seeds.py               # reserved extension point
+│   └── session.py             # standalone session format
+├── skills/
+│   └── awayout-security/
+│       └── SKILL.md           # Agent instructions
+├── agent_api.py               # high-level Agent tool entry
+├── main.py                    # standalone unified entry
+├── interactive_pair.py        # standalone PAIR implementation
+├── codeagent_connector.py
 ├── CODEAGENT_CONNECTOR.md
 ├── doctor.py
 ├── setup_windows.bat
@@ -294,7 +299,28 @@ AwayOut-AI/
 └── README.md
 ```
 
-Seed Prompt support is reserved only and is not loaded by the current CLI.
+---
+
+## 9. Responsibility boundary
+
+```text
+Code / Controller
+- what step happens next
+- whether a transition is legal
+- thresholds and limits
+- persistence
+- tree structure
+- stop conditions
+
+Agent / LLM
+- candidate wording
+- semantic interpretation
+- judgement reasoning
+- user interaction
+- result presentation
+```
+
+The design goal is to keep non-deterministic language work in the Agent while preventing the Agent from freely changing the security-testing algorithm.
 
 ---
 
@@ -302,17 +328,20 @@ Seed Prompt support is reserved only and is not loaded by the current CLI.
 
 Implemented now:
 
-- unified algorithm entry point;
-- PAIR human-in-the-loop testing;
-- CodeAgent Python Connector;
-- Ollama provider;
-- Attacker/Judge scoring loop;
-- session logging;
-- Windows/uv/Conda setup support.
+- Agent-friendly high-level API;
+- deterministic PAIR controller;
+- enforced state transitions;
+- persistent Agent sessions;
+- deterministic tree and summary output;
+- Agent skill instructions;
+- existing standalone PAIR retained;
+- CodeAgent Python Connector retained for standalone mode;
+- Windows / uv / Conda setup support.
 
 Reserved next:
 
-- TAP;
-- DrAttack;
-- attack-tree visualization and branching;
+- deterministic TAP controller;
+- deterministic DrAttack controller;
+- richer branching/tree visualization;
+- optional MCP wrapper around the stable `agent_api.py` operations;
 - optional curated Seed Prompt library.
