@@ -2,7 +2,56 @@
 
 AwayOut-AI is a human-in-the-loop assistant for **authorized chatbot security testing**.
 
-It uses an Attacker model to generate a test prompt, lets a tester send that prompt manually to a real target dialog box, evaluates the pasted target response with a Judge model, and then uses the response + score to generate the next attempt.
+It is designed around three attack methodologies inherited from the upstream project: **PAIR**, **TAP**, and **DrAttack**. The current release provides a runnable PAIR workflow and reserves unified entry points for TAP and DrAttack.
+
+> Use only on systems you are authorized to test.
+
+---
+
+## Origin and attribution
+
+AwayOut-AI was adapted from the open-source project **Hcxgraphics/JailBreak-AI**:
+
+- Upstream repository: https://github.com/Hcxgraphics/JailBreak-AI
+- Upstream project license: MIT
+
+The upstream project implements DrAttack, PAIR, TAP, LLM-as-Judge evaluation, Ollama-based model access, and experiment logging.
+
+AwayOut-AI changes the usage model for real enterprise testing:
+
+- target chatbot is operated manually by the tester;
+- Attacker/Judge model runtime is abstracted behind providers;
+- a user-written CodeAgent Python Connector is the recommended model integration;
+- Windows setup and diagnostics are provided;
+- generated prompt and actually sent prompt are recorded separately;
+- target conversation state (`continue` / `new`) is recorded;
+- all attack methods are exposed through one unified `main.py` entry point.
+
+The PAIR-style concept is based on **Prompt Automatic Iterative Refinement (PAIR)**: *Jailbreaking Black Box Large Language Models in Twenty Queries* (Chao et al.). The upstream project also references DrAttack and TAP research.
+
+AwayOut-AI is not presented as the original implementation of those research methods. Please cite the upstream project and the underlying research when using the framework in reports or publications.
+
+---
+
+## 1. Algorithms
+
+Start the project through:
+
+```text
+main.py
+```
+
+The unified menu currently shows:
+
+```text
+1. PAIR     - feedback-driven iterative refinement (available)
+2. TAP      - Tree of Attacks with Pruning (reserved, not yet wired in)
+3. DrAttack - Prompt Decomposition & Reconstruction (reserved, not yet wired in)
+```
+
+### PAIR
+
+Current runnable workflow:
 
 ```text
 Objective
@@ -22,33 +71,41 @@ Score + feedback
 Next test prompt
 ```
 
-> Use only on systems you are authorized to test.
+`interactive_pair.py` remains in the repository as the PAIR implementation module and compatibility entry point, but users should normally launch `main.py`.
+
+### TAP
+
+Reserved for future integration of:
+
+```text
+Generate multiple branches
+        ↓
+Evaluate branches
+        ↓
+Prune weak/off-topic paths
+        ↓
+Expand strong branches
+        ↓
+Attack tree / best candidate
+```
+
+### DrAttack
+
+Reserved for future integration of:
+
+```text
+Prompt decomposition
+      ↓
+Semantic replacement / rewriting
+      ↓
+Prompt reconstruction
+      ↓
+Target evaluation
+```
 
 ---
 
-## Origin and attribution
-
-AwayOut-AI was adapted from the open-source project **Hcxgraphics/JailBreak-AI**:
-
-- Upstream repository: https://github.com/Hcxgraphics/JailBreak-AI
-- Upstream project license: MIT
-
-The upstream project implements DrAttack, PAIR, TAP, LLM-as-Judge evaluation, Ollama-based model access, and experiment logging. AwayOut-AI currently focuses on the **PAIR-style generate → evaluate → refine loop**, but changes the usage model substantially for real enterprise testing:
-
-- target chatbot is operated manually by the tester;
-- Attacker/Judge model runtime is abstracted behind providers;
-- a user-written CodeAgent Python Connector is the recommended model integration;
-- Windows setup and diagnostics are provided;
-- generated prompt and actually sent prompt are recorded separately;
-- target conversation state (`continue` / `new`) is recorded.
-
-The PAIR-style concept used by the upstream project is based on **Prompt Automatic Iterative Refinement (PAIR)**: *Jailbreaking Black Box Large Language Models in Twenty Queries* (Chao et al.). The upstream project also references DrAttack and TAP research.
-
-AwayOut-AI is not presented as the original implementation of those research methods. Please cite the upstream project and the underlying research when using the framework in reports or publications.
-
----
-
-## 1. Recommended setup: local CodeAgent connector
+## 2. Recommended setup: local CodeAgent connector
 
 The recommended model integration is a user-written Python connector.
 
@@ -100,7 +157,7 @@ set CODEAGENT_CONNECTOR=D:\private\my_codeagent_connector.py
 
 ---
 
-## 2. Windows installation
+## 3. Windows installation
 
 ### Requirements
 
@@ -138,9 +195,7 @@ Environment priority:
 
 If `uv` is available, the setup script can use `uv pip` to install dependencies into `.venv` without requiring `pip` inside that environment.
 
-### Option B: manual installation with uv (recommended for uv users)
-
-Run these commands only for the first setup, or when recreating the environment:
+### Option B: manual installation with uv
 
 ```bat
 cd D:\path\to\AwayOut-AI
@@ -177,7 +232,7 @@ python doctor.py
 
 ---
 
-## 3. Running AwayOut-AI
+## 4. Running AwayOut-AI
 
 After installation is complete, normal startup does **not** require reinstalling dependencies.
 
@@ -190,27 +245,27 @@ run_windows.bat
 ### Option B: run directly with `.venv`
 
 ```bat
-.venv\Scripts\python.exe interactive_pair.py
+.venv\Scripts\python.exe main.py
 ```
 
 ### Option C: run in an activated Conda environment
 
 ```bat
 conda activate awayout
-python interactive_pair.py
+python main.py
 ```
 
 For most uv users, the normal daily command is simply:
 
 ```bat
-.venv\Scripts\python.exe interactive_pair.py
+.venv\Scripts\python.exe main.py
 ```
 
 ---
 
-## 4. Model providers
+## 5. Model providers
 
-At startup AwayOut-AI offers:
+When PAIR is selected, AwayOut-AI offers:
 
 ```text
 1. CodeAgent Python Connector (recommended)
@@ -243,12 +298,6 @@ Default API:
 http://127.0.0.1:11434
 ```
 
-Example:
-
-```powershell
-ollama pull mistral
-```
-
 ### Provider 3: OpenAI-compatible HTTP
 
 Expected endpoints below the configured Base URL:
@@ -270,7 +319,7 @@ AwayOut-AI writes the conversation to stdin and reads stdout as the model respon
 
 ---
 
-## 5. Complete first-test walkthrough
+## 6. Complete first-test walkthrough
 
 Start AwayOut-AI:
 
@@ -281,21 +330,23 @@ run_windows.bat
 or:
 
 ```text
-.venv\Scripts\python.exe interactive_pair.py
+.venv\Scripts\python.exe main.py
 ```
 
 Then:
 
-1. Choose `1. CodeAgent Python Connector`.
-2. Accept `codeagent_connector.py`, or enter your custom connector path.
-3. Choose/type the Attacker model.
-4. Choose/type the Judge model.
-5. Enter the test Objective.
-6. Select an attack strategy.
-7. Set the maximum number of iterations.
-8. Set the Judge success threshold (default `7`).
+1. Choose the attack algorithm.
+2. For the current release, choose `1. PAIR`.
+3. Choose `1. CodeAgent Python Connector` or another model provider.
+4. Accept `codeagent_connector.py`, or enter your custom connector path.
+5. Choose/type the Attacker model.
+6. Choose/type the Judge model.
+7. Enter the test Objective.
+8. Select a PAIR attack strategy.
+9. Set the maximum number of iterations.
+10. Set the Judge success threshold (default `7`).
 
-Each round works like this:
+Each PAIR round works like this:
 
 ```text
 Attacker generates candidate
@@ -330,7 +381,7 @@ For target conversation state, choose:
 
 ---
 
-## 6. Built-in attack strategies
+## 7. Built-in PAIR strategies
 
 Current PAIR-style strategies:
 
@@ -342,7 +393,7 @@ The tester may switch strategy during a session.
 
 ---
 
-## 7. Session logs and review
+## 8. Session logs and review
 
 Logs are written to:
 
@@ -368,7 +419,7 @@ Each iteration records:
 
 ---
 
-## 8. Environment diagnostics
+## 9. Environment diagnostics
 
 Run with the currently selected Python environment:
 
@@ -386,7 +437,7 @@ For `.venv` on Windows:
 
 ---
 
-## 9. Troubleshooting
+## 10. Troubleshooting
 
 ### uv-created `.venv` has no pip
 
@@ -423,13 +474,9 @@ With active Conda:
 python -m pip install your-package
 ```
 
-### Chinese text looks wrong in Windows console
-
-The BAT scripts use UTF-8 (`chcp 65001`). Windows Terminal is recommended if rendering is still incorrect.
-
 ---
 
-## 10. Project layout
+## 11. Project layout
 
 ```text
 AwayOut-AI/
@@ -439,12 +486,13 @@ AwayOut-AI/
 │   ├── judge.py
 │   ├── ollama.py
 │   ├── providers.py
-│   ├── seeds.py              # reserved extension point; not used by current CLI
+│   ├── seeds.py              # reserved extension point
 │   └── session.py
+├── main.py                   # unified algorithm entry point
+├── interactive_pair.py       # PAIR implementation / compatibility entry
 ├── codeagent_connector.py
 ├── CODEAGENT_CONNECTOR.md
 ├── doctor.py
-├── interactive_pair.py
 ├── setup_windows.bat
 ├── run_windows.bat
 ├── requirements.txt
@@ -460,16 +508,21 @@ Seed Prompt support is currently **reserved only**. The current CLI does not loa
 
 ---
 
-## 11. Current scope
+## 12. Current scope
 
-This version intentionally keeps the target chatbot manual. AwayOut-AI does not automate browser authentication, cookies, target APIs, or UI interaction.
+Current runnable capability:
 
-Current focus:
-
-- iterative prompt generation;
+- PAIR iterative prompt generation;
 - human-in-the-loop target interaction;
 - Judge scoring;
 - feedback-driven refinement;
 - session logging and later review.
 
-Natural future extensions include attack-tree visualization, session replay/branching, browser adapters, automated target connectors, and optionally a curated Seed Prompt library.
+Reserved / next integrations:
+
+- TAP tree search and pruning;
+- DrAttack decomposition and reconstruction;
+- attack-tree visualization;
+- session replay/branching;
+- browser/target adapters;
+- optional curated Seed Prompt library.
