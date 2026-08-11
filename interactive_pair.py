@@ -5,7 +5,7 @@ import os
 from awayout.attacker import AttackerLLM, STRATEGIES
 from awayout.judge import JudgeLLM
 from awayout.ollama import OllamaClient
-from awayout.providers import ChatClient, CommandClient, OpenAICompatibleClient, PythonConnectorClient
+from awayout.providers import ChatClient, PythonConnectorClient
 from awayout.session import IterationRecord, TestSession
 
 SEP = "=" * 72
@@ -88,11 +88,9 @@ def choose_provider() -> tuple[str, ChatClient, list[str]]:
     print("\n模型提供方:")
     print("  1. CodeAgent Python Connector（推荐，自行实现脚本）")
     print("  2. Ollama")
-    print("  3. CodeAgent / OpenAI-compatible HTTP")
-    print("  4. CodeAgent CLI command")
     choice = ask("选择 Provider", os.getenv("AWAYOUT_PROVIDER", "1")).lower()
 
-    if choice in {"1", "connector", "python"}:
+    if choice in {"1", "connector", "python", "codeagent"}:
         connector_path = ask(
             "Connector Python 文件",
             os.getenv("CODEAGENT_CONNECTOR", "codeagent_connector.py"),
@@ -108,34 +106,6 @@ def choose_provider() -> tuple[str, ChatClient, list[str]]:
         except Exception as exc:
             raise RuntimeError(f"Connector list_models() 调用失败: {exc}") from exc
         return "codeagent-connector", client, models
-
-    if choice in {"3", "codeagent", "http", "openai"}:
-        base_url = ask("CodeAgent API Base URL", os.getenv("CODEAGENT_BASE_URL", "http://127.0.0.1:8000/v1"))
-        api_key = ask("API Key（无则直接回车）", os.getenv("CODEAGENT_API_KEY", ""))
-        client = OpenAICompatibleClient(base_url=base_url, api_key=api_key)
-        if not client.is_running():
-            raise RuntimeError(
-                f"无法连接 CodeAgent OpenAI-compatible API: {base_url}\n"
-                "请确认它提供 /models 和 /chat/completions 接口。"
-            )
-        try:
-            models = client.list_models()
-        except Exception:
-            models = []
-        return "codeagent-http", client, models
-
-    if choice in {"4", "cli", "command"}:
-        command = ask(
-            "CodeAgent 命令模板（可使用 {model}）",
-            os.getenv("CODEAGENT_COMMAND", "codeagent --model {model}"),
-        )
-        client = CommandClient(command_template=command)
-        if not client.is_running():
-            raise RuntimeError(
-                "找不到 CodeAgent CLI 可执行文件。请确认命令已加入 PATH，"
-                "或在 CODEAGENT_COMMAND 中填写完整路径。"
-            )
-        return "codeagent-cli", client, []
 
     base_url = ask("Ollama 地址", "http://127.0.0.1:11434")
     client = OllamaClient(base_url=base_url)
