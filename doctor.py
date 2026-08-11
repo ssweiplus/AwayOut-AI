@@ -52,11 +52,15 @@ def main() -> int:
                 try:
                     models = connector.list_models()
                 except Exception as exc:
-                    warn("CodeAgent Python Connector", f"loaded, but list_models() failed: {exc}")
+                    warn("CodeAgent Python Connector", f"loadable, but list_models() failed: {exc}")
                 else:
                     ok(
                         "CodeAgent Python Connector",
-                        f"{connector_path}; models: {', '.join(models) if models else '(manual model entry)'}",
+                        (
+                            f"{connector_path}; contract loadable; "
+                            f"models: {', '.join(models) if models else '(manual model entry)'}; "
+                            "invoke() is not health-checked by doctor.py"
+                        ),
                     )
             else:
                 warn(
