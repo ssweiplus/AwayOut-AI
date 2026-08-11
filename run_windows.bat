@@ -63,7 +63,7 @@ if /I "!ENV_MODE!"=="conda" (
   echo Starting AwayOut-AI with project .venv...
 )
 echo.
-%PY_CMD% interactive_pair.py
+%PY_CMD% main.py
 set "RC=!errorlevel!"
 
 echo.
