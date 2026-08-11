@@ -7,8 +7,6 @@ It uses an Attacker model to generate a test prompt, lets a tester send that pro
 ```text
 Objective
    ↓
-Seed Prompt(s) (optional)
-   ↓
 Attacker LLM
    ↓
 Suggested test prompt
@@ -42,10 +40,9 @@ The upstream project implements DrAttack, PAIR, TAP, LLM-as-Judge evaluation, Ol
 - a user-written CodeAgent Python Connector is the recommended model integration;
 - Windows setup and diagnostics are provided;
 - generated prompt and actually sent prompt are recorded separately;
-- target conversation state (`continue` / `new`) is recorded;
-- optional high-quality Seed Prompt libraries can be used as mutation starting points.
+- target conversation state (`continue` / `new`) is recorded.
 
-The PAIR-style attack concept used by the upstream project is based on **Prompt Automatic Iterative Refinement (PAIR)**: *Jailbreaking Black Box Large Language Models in Twenty Queries* (Chao et al.). The upstream project also references DrAttack and TAP research.
+The PAIR-style concept used by the upstream project is based on **Prompt Automatic Iterative Refinement (PAIR)**: *Jailbreaking Black Box Large Language Models in Twenty Queries* (Chao et al.). The upstream project also references DrAttack and TAP research.
 
 AwayOut-AI is not presented as the original implementation of those research methods. Please cite the upstream project and the underlying research when using the framework in reports or publications.
 
@@ -82,25 +79,12 @@ codeagent_connector.py
 
 Edit only that file to call your own local CodeAgent SDK, module, HTTP client, subprocess, RPC client, or other integration.
 
-A minimal implementation looks like:
-
-```python
-def invoke(messages, model="", temperature=0.7, max_tokens=1200):
-    try:
-        result = my_codeagent(messages=messages, model=model)
-        return {"success": True, "result": result}
-    except Exception as exc:
-        return {"success": False, "result": str(exc)}
-```
-
 Optional model discovery:
 
 ```python
 def list_models():
     return ["model-a", "model-b"]
 ```
-
-If `list_models()` is not implemented, AwayOut-AI simply asks you to type the Attacker/Judge model name.
 
 For the complete connector contract, see `CODEAGENT_CONNECTOR.md`.
 
@@ -134,42 +118,83 @@ requests>=2.31.0,<3.0.0
 
 Ollama is optional. You do not need Ollama when using your CodeAgent connector.
 
+### Python environment priority
+
+The Windows BAT scripts use this priority:
+
+```text
+1. currently active Conda environment
+2. existing project .venv
+3. create a new project .venv
+```
+
+So Conda users can keep their existing workflow. If a Conda environment is active, AwayOut-AI uses that environment directly and installs project dependencies into it.
+
+Example:
+
+```bat
+conda activate awayout
+setup_windows.bat
+run_windows.bat
+```
+
+The active Conda environment must use Python 3.10 or newer.
+
+If you do **not** want AwayOut-AI dependencies installed into your current Conda environment, deactivate Conda first:
+
+```bat
+conda deactivate
+setup_windows.bat
+```
+
+Then the setup script creates and uses the repository-local `.venv` instead.
+
 ### First run
 
-Download/clone the repository and double-click:
+Download/clone the repository and run:
 
 ```text
 setup_windows.bat
 ```
 
-The script will:
+It will:
 
-- find `py` or `python`;
+- reuse the active Conda Python when `CONDA_PREFIX` is present and valid;
+- otherwise reuse an existing `.venv`;
+- otherwise find `py` / `python` and create `.venv`;
 - verify Python 3.10+;
-- create a project-local `.venv`;
-- upgrade pip inside `.venv`;
-- install `requirements.txt`;
+- install/update required Python packages in the selected environment;
 - run `doctor.py`.
-
-No global Python packages are installed.
 
 ### Normal run
 
-Double-click:
+Run:
 
 ```text
 run_windows.bat
 ```
 
-If `.venv` does not exist, it automatically launches the setup script first.
+If a Conda environment is currently active, it is preferred over `.venv`. Otherwise `.venv` is used when available.
 
-### Manual Windows commands
+If neither is available, `run_windows.bat` automatically calls `setup_windows.bat`.
+
+### Manual Windows commands with `.venv`
 
 ```powershell
 py -3 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 .\.venv\Scripts\python.exe doctor.py
 .\.venv\Scripts\python.exe interactive_pair.py
+```
+
+### Manual Windows commands with Conda
+
+```bat
+conda create -n awayout python=3.11 -y
+conda activate awayout
+python -m pip install -r requirements.txt
+python doctor.py
+python interactive_pair.py
 ```
 
 ---
@@ -184,8 +209,6 @@ At startup AwayOut-AI offers:
 3. CodeAgent / OpenAI-compatible HTTP
 4. CodeAgent CLI command
 ```
-
-The Attacker and Judge may use the same provider/model or different model names within the selected provider.
 
 ### Provider 1: CodeAgent Python Connector
 
@@ -226,20 +249,6 @@ GET  /models
 POST /chat/completions
 ```
 
-Example Base URL:
-
-```text
-http://127.0.0.1:8000/v1
-```
-
-Optional environment variables:
-
-```bat
-set CODEAGENT_BASE_URL=http://127.0.0.1:8000/v1
-set CODEAGENT_MODEL=your-model
-set CODEAGENT_API_KEY=
-```
-
 ### Provider 4: CLI command
 
 Example:
@@ -248,98 +257,11 @@ Example:
 codeagent --model {model}
 ```
 
-Preset on Windows:
-
-```bat
-set CODEAGENT_COMMAND=codeagent --model {model}
-```
-
 AwayOut-AI writes the conversation to stdin and reads stdout as the model response.
 
 ---
 
-## 4. Seed Prompt library: should you use one?
-
-**Recommended, but optional.** AwayOut-AI can generate directly from the Objective with no seeds. However, for repeatable security testing, a small set of high-quality original templates usually gives the Attacker a stronger starting point and reduces wasted iterations.
-
-Good seeds should capture reusable structure rather than one brittle payload. Useful qualities include:
-
-- a framing or reasoning pattern that has worked reliably;
-- clear alignment with a specific strategy such as `logical_appeal`, `authority`, or `roleplay`;
-- a `{objective}` placeholder instead of hard-coding one target request;
-- enough structure for the Attacker to mutate, but not so much text that every variant becomes near-identical;
-- provenance and test notes maintained outside the runtime file when you build a mature corpus.
-
-### Where to add seeds
-
-Default seed file:
-
-```text
-seeds/seeds.json
-```
-
-Schema:
-
-```json
-[
-  {
-    "name": "research_evaluation",
-    "strategy": "logical_appeal",
-    "template": "... {objective} ..."
-  }
-]
-```
-
-`strategy` can be:
-
-```text
-logical_appeal
-authority
-roleplay
-any
-```
-
-At startup, AwayOut-AI loads seeds matching the selected strategy, replaces `{objective}` with the current test Objective, and passes them to the Attacker as **reference starting points**. They are not sent directly to the target unless the Attacker independently produces the same text.
-
-The Attacker is explicitly instructed to preserve useful structure while adapting, combining, or substantially mutating the seeds using the current Objective, previous target response, Judge score, and human notes.
-
-Only the first several matching seeds are included in the Attacker context to avoid a very large seed library overwhelming the feedback signal.
-
-### Custom seed file
-
-Windows CMD:
-
-```bat
-set AWAYOUT_SEED_FILE=D:\security\my-seeds.json
-run_windows.bat
-```
-
-PowerShell:
-
-```powershell
-$env:AWAYOUT_SEED_FILE="D:\security\my-seeds.json"
-.\run_windows.bat
-```
-
-To run without seeds, point `AWAYOUT_SEED_FILE` to a nonexistent/empty library or remove/rename the default seed file. The Attacker will fall back to Objective-only generation.
-
-### Recommended corpus layout for larger teams
-
-For the first version, `seeds/seeds.json` is intentionally simple. As the corpus grows, a useful operational split is:
-
-```text
-seeds/
-├── seeds.json                 # curated active seeds used by default
-├── candidates/                # newly collected templates awaiting review
-├── archived/                  # retired/low-quality seeds
-└── notes/                     # provenance, target type, success rate, observations
-```
-
-Do not treat a large prompt dump as a high-quality seed library. Curate seeds based on reproducibility and test value.
-
----
-
-## 5. Complete first-test walkthrough
+## 4. Complete first-test walkthrough
 
 Run:
 
@@ -355,9 +277,8 @@ Then:
 4. Choose/type the Judge model.
 5. Enter the test Objective.
 6. Select an attack strategy.
-7. AwayOut-AI loads matching seeds from `seeds/seeds.json` if available.
-8. Set the maximum number of iterations.
-9. Set the Judge success threshold (default `7`).
+7. Set the maximum number of iterations.
+8. Set the Judge success threshold (default `7`).
 
 Each round works like this:
 
@@ -387,12 +308,6 @@ s      switch attack strategy
 q      save and quit
 ```
 
-When pasting a target response, terminate input with a line containing only:
-
-```text
-END
-```
-
 For target conversation state, choose:
 
 - `continue` — keep using the same target chat session;
@@ -400,7 +315,7 @@ For target conversation state, choose:
 
 ---
 
-## 6. Built-in attack strategies
+## 5. Built-in attack strategies
 
 Current PAIR-style strategies:
 
@@ -408,11 +323,11 @@ Current PAIR-style strategies:
 - `authority`
 - `roleplay`
 
-The tester may switch strategy during a session. When the strategy changes, AwayOut-AI reloads matching seeds for the new strategy.
+The tester may switch strategy during a session.
 
 ---
 
-## 7. Session logs and review
+## 6. Session logs and review
 
 Logs are written to:
 
@@ -434,100 +349,73 @@ Each iteration records:
 - tester note;
 - target conversation mode.
 
-Provider information is stored in model identifiers, for example:
-
-```text
-codeagent-connector:model-a
-ollama:mistral:latest
-codeagent-http:model-b
-```
-
 `sessions/` is ignored by Git because target responses may contain sensitive information.
 
 ---
 
-## 8. Environment diagnostics
+## 7. Environment diagnostics
 
-Run:
+Run with the currently selected Python environment:
 
 ```bash
 python doctor.py
 ```
 
-Windows project environment:
+For `.venv` on Windows:
 
 ```powershell
 .\.venv\Scripts\python.exe doctor.py
 ```
 
-`doctor.py` checks:
-
-- operating system;
-- Python version;
-- `requests` dependency;
-- the configured/default Python connector;
-- Ollama if present;
-- CodeAgent HTTP when `CODEAGENT_BASE_URL` is set;
-- CodeAgent CLI when `CODEAGENT_COMMAND` is set.
-
-The default `codeagent_connector.py` intentionally returns a configuration error until you implement `invoke()`. That is expected on a fresh clone.
+`doctor.py` checks the base Python environment and available/configured providers.
 
 ---
 
-## 9. Troubleshooting
+## 8. Troubleshooting
 
-### `Python was not found`
+### Conda is installed but BAT still uses `.venv`
 
-Install Python 3.10+ and open a new terminal. Verify:
+The BAT scripts only prefer Conda when a Conda environment is **currently activated** and `%CONDA_PREFIX%\python.exe` exists.
 
-```powershell
-py -3 --version
+Run:
+
+```bat
+conda activate your-env
+run_windows.bat
 ```
 
-### Connector cannot be loaded
+### I activated the wrong Conda environment
 
-Check that the file exists and contains:
+The BAT scripts intentionally trust the currently active environment. Activate the desired one before running them:
 
-```python
-def invoke(...):
-    ...
+```bat
+conda activate awayout
+run_windows.bat
 ```
-
-Default path:
-
-```text
-codeagent_connector.py
-```
-
-### Connector returns failure
-
-AwayOut-AI displays the connector's `result` as the error message. Test the underlying CodeAgent call inside your connector first.
 
 ### Connector uses a private Python SDK
 
-Install that SDK into the project's `.venv`, for example:
+Install that SDK into whichever environment the launcher is using.
+
+For active Conda:
+
+```bat
+python -m pip install your-package
+```
+
+For `.venv`:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install your-package
 ```
 
-If the dependency should be required for every user, add it to `requirements.txt`.
-
-### Seed file fails to load
-
-Validate that the file is UTF-8 JSON and its top level is a list. Every usable item should contain a non-empty `template` string. Invalid/missing seed files do not prevent Objective-only testing.
-
 ### Chinese text looks wrong in Windows console
 
 The BAT scripts use UTF-8 (`chcp 65001`). Windows Terminal is recommended if rendering is still incorrect.
 
-### Ollama is selected but unavailable
-
-Start Ollama or choose the CodeAgent Python Connector instead.
-
 ---
 
-## 10. Project layout
+## 9. Project layout
 
 ```text
 AwayOut-AI/
@@ -537,50 +425,37 @@ AwayOut-AI/
 │   ├── judge.py
 │   ├── ollama.py
 │   ├── providers.py
-│   ├── seeds.py
+│   ├── seeds.py              # reserved extension point; not used by current CLI
 │   └── session.py
-├── seeds/
-│   └── seeds.json             # curated Seed Prompt library
-├── codeagent_connector.py     # user-editable connector template
-├── CODEAGENT_CONNECTOR.md     # connector contract
-├── doctor.py                  # environment diagnostics
-├── interactive_pair.py        # main CLI
-├── setup_windows.bat          # first-time Windows setup
-├── run_windows.bat            # normal Windows launcher
+├── codeagent_connector.py
+├── CODEAGENT_CONNECTOR.md
+├── doctor.py
+├── interactive_pair.py
+├── setup_windows.bat
+├── run_windows.bat
 ├── requirements.txt
 ├── .gitignore
 └── README.md
 ```
 
-Provider architecture:
+### Reserved Seed capability
 
-```text
-Seed Library ──────────────┐
-                           ↓
-                      AttackerLLM ─┐
-                                   ├── ChatClient
-                      JudgeLLM ────┘      │
-                                          ├── PythonConnectorClient
-                                          ├── OllamaClient
-                                          ├── OpenAICompatibleClient
-                                          └── CommandClient
-```
+Seed Prompt support is currently **reserved only**. The current CLI does not load a Seed library and users do not need to prepare any templates.
 
-The PAIR attack loop is independent from the model runtime. Adding a new runtime only requires another provider implementation or a different user connector.
+`awayout/seeds.py` and the Attacker-side extension point are retained so a curated Seed library can be added later without redesigning the core loop.
 
 ---
 
-## 11. Current scope
+## 10. Current scope
 
 This version intentionally keeps the target chatbot manual. AwayOut-AI does not automate browser authentication, cookies, target APIs, or UI interaction.
 
 Current focus:
 
-- optional Seed Prompt initialization;
 - iterative prompt generation;
 - human-in-the-loop target interaction;
 - Judge scoring;
 - feedback-driven refinement;
 - session logging and later review.
 
-Natural future extensions include attack-tree visualization, session replay/branching, browser adapters, automated target connectors, and seed effectiveness statistics.
+Natural future extensions include attack-tree visualization, session replay/branching, browser adapters, automated target connectors, and optionally a curated Seed Prompt library.
