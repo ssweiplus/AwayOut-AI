@@ -41,6 +41,31 @@ def main() -> int:
 
     provider_found = False
 
+    connector_path = os.getenv("CODEAGENT_CONNECTOR", "codeagent_connector.py").strip()
+    if connector_path:
+        try:
+            from awayout.providers import PythonConnectorClient
+
+            connector = PythonConnectorClient(connector_path)
+            if connector.is_running():
+                provider_found = True
+                try:
+                    models = connector.list_models()
+                except Exception as exc:
+                    warn("CodeAgent Python Connector", f"loaded, but list_models() failed: {exc}")
+                else:
+                    ok(
+                        "CodeAgent Python Connector",
+                        f"{connector_path}; models: {', '.join(models) if models else '(manual model entry)'}",
+                    )
+            else:
+                warn(
+                    "CodeAgent Python Connector",
+                    f"{connector_path} exists but cannot be loaded or does not define invoke()",
+                )
+        except Exception as exc:
+            warn("CodeAgent Python Connector", str(exc))
+
     try:
         from awayout.ollama import OllamaClient
 
@@ -88,7 +113,7 @@ def main() -> int:
     if not provider_found:
         warn(
             "Model provider",
-            "none detected automatically; this is OK if you will configure Ollama or CodeAgent interactively at startup",
+            "none detected automatically; configure codeagent_connector.py or choose another provider at startup",
         )
 
     print("\nBase environment is ready. Run interactive_pair.py or run_windows.bat.")
