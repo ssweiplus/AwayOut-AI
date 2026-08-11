@@ -16,7 +16,7 @@ Default:
 logical_appeal
 ```
 
-This is the initial mutation style. The controller accepts a non-empty strategy label rather than a closed enum, so the values below are recommended presets, not the only legal strings.
+This is the initial mutation style. `strategy` is a free-form label rather than a closed enum, so the values below are recommended presets, not the only possible values. Prefer a non-empty, self-describing value.
 
 Recommended presets:
 
@@ -24,8 +24,8 @@ Recommended presets:
 logical_appeal  [default]
   Start from a reasonable, testing, diagnostic or task-oriented framing.
 
-# authority
-#   Use an authorized/admin/audit/maintenance-style framing when appropriate to the authorized test.
+authority
+  Use an authorized/admin/audit/maintenance-style framing when appropriate to the authorized test.
 
 roleplay
   Use role/scenario framing.
