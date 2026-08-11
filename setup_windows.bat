@@ -8,51 +8,82 @@ echo AwayOut-AI - Windows first-time setup
 echo ============================================================
 
 set "PY_CMD="
-where py >nul 2>nul
-if not errorlevel 1 set "PY_CMD=py -3"
-if not defined PY_CMD (
-  where python >nul 2>nul
-  if not errorlevel 1 set "PY_CMD=python"
+set "ENV_MODE="
+
+if defined CONDA_PREFIX (
+  if exist "%CONDA_PREFIX%\python.exe" (
+    set "PY_CMD="%CONDA_PREFIX%\python.exe""
+    set "ENV_MODE=conda"
+    echo [OK] Active Conda environment detected: %CONDA_PREFIX%
+  )
 )
 
 if not defined PY_CMD (
-  echo.
-  echo [ERROR] Python was not found.
-  echo Install Python 3.10 or newer from https://www.python.org/downloads/windows/
-  echo During installation, enable "Add python.exe to PATH" if offered.
-  echo.
-  pause
-  exit /b 1
+  if exist ".venv\Scripts\python.exe" (
+    set "PY_CMD=".venv\Scripts\python.exe""
+    set "ENV_MODE=venv"
+    echo [OK] Existing project virtual environment found: .venv
+  )
+)
+
+if not defined PY_CMD (
+  set "BASE_PY="
+  where py >nul 2>nul
+  if not errorlevel 1 set "BASE_PY=py -3"
+  if not defined BASE_PY (
+    where python >nul 2>nul
+    if not errorlevel 1 set "BASE_PY=python"
+  )
+
+  if not defined BASE_PY (
+    echo.
+    echo [ERROR] Python was not found.
+    echo Install Python 3.10+ or activate a Conda environment with Python 3.10+.
+    echo.
+    pause
+    exit /b 1
+  )
+
+  %BASE_PY% -c "import sys; raise SystemExit(0 if sys.version_info >= (3,10) else 1)" >nul 2>nul
+  if errorlevel 1 (
+    echo.
+    echo [ERROR] Python 3.10 or newer is required.
+    %BASE_PY% --version
+    echo.
+    pause
+    exit /b 1
+  )
+
+  echo [INFO] No active Conda environment found. Creating project .venv...
+  %BASE_PY% -m venv .venv
+  if errorlevel 1 goto :fail
+  set "PY_CMD=".venv\Scripts\python.exe""
+  set "ENV_MODE=venv"
 )
 
 %PY_CMD% -c "import sys; raise SystemExit(0 if sys.version_info >= (3,10) else 1)" >nul 2>nul
 if errorlevel 1 (
   echo.
-  echo [ERROR] Python 3.10 or newer is required.
+  echo [ERROR] Selected Python environment must be Python 3.10 or newer.
   %PY_CMD% --version
-  echo Download: https://www.python.org/downloads/windows/
   echo.
   pause
   exit /b 1
 )
 
 for /f "delims=" %%V in ('%PY_CMD% --version 2^>^&1') do echo [OK] %%V
-
-if not exist ".venv\Scripts\python.exe" (
-  echo [INFO] Creating local virtual environment: .venv
-  %PY_CMD% -m venv .venv
-  if errorlevel 1 goto :fail
+if /I "!ENV_MODE!"=="conda" (
+  echo [INFO] Dependencies will be installed into the currently active Conda environment.
 ) else (
-  echo [OK] Existing virtual environment found.
+  echo [INFO] Dependencies will be installed into the project-local .venv environment.
 )
 
-set "VENV_PY=.venv\Scripts\python.exe"
 echo [INFO] Updating pip...
-"!VENV_PY!" -m pip install --upgrade pip
+%PY_CMD% -m pip install --upgrade pip
 if errorlevel 1 goto :fail
 
 echo [INFO] Installing Python dependencies...
-"!VENV_PY!" -m pip install -r requirements.txt
+%PY_CMD% -m pip install -r requirements.txt
 if errorlevel 1 goto :fail
 
 echo.
@@ -61,12 +92,17 @@ echo        Recommended: CodeAgent Python Connector ^(edit codeagent_connector.p
 echo        Also supported: Ollama, CodeAgent/OpenAI-compatible HTTP, CodeAgent CLI.
 
 echo.
-"!VENV_PY!" doctor.py
+%PY_CMD% doctor.py
 set "DOCTOR_RC=!errorlevel!"
 if "!DOCTOR_RC!"=="0" (
   echo.
   echo ============================================================
-  echo Setup complete. Next time, double-click run_windows.bat
+  if /I "!ENV_MODE!"=="conda" (
+    echo Setup complete using active Conda environment.
+    echo Keep this Conda environment activated when using run_windows.bat.
+  ) else (
+    echo Setup complete. Next time, double-click run_windows.bat
+  )
   echo ============================================================
 ) else (
   echo.
