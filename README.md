@@ -7,6 +7,8 @@ It uses an Attacker model to generate a test prompt, lets a tester send that pro
 ```text
 Objective
    ↓
+Seed Prompt(s) (optional)
+   ↓
 Attacker LLM
    ↓
 Suggested test prompt
@@ -23,6 +25,29 @@ Next test prompt
 ```
 
 > Use only on systems you are authorized to test.
+
+---
+
+## Origin and attribution
+
+AwayOut-AI was adapted from the open-source project **Hcxgraphics/JailBreak-AI**:
+
+- Upstream repository: https://github.com/Hcxgraphics/JailBreak-AI
+- Upstream project license: MIT
+
+The upstream project implements DrAttack, PAIR, TAP, LLM-as-Judge evaluation, Ollama-based model access, and experiment logging. AwayOut-AI currently focuses on the **PAIR-style generate → evaluate → refine loop**, but changes the usage model substantially for real enterprise testing:
+
+- target chatbot is operated manually by the tester;
+- Attacker/Judge model runtime is abstracted behind providers;
+- a user-written CodeAgent Python Connector is the recommended model integration;
+- Windows setup and diagnostics are provided;
+- generated prompt and actually sent prompt are recorded separately;
+- target conversation state (`continue` / `new`) is recorded;
+- optional high-quality Seed Prompt libraries can be used as mutation starting points.
+
+The PAIR-style attack concept used by the upstream project is based on **Prompt Automatic Iterative Refinement (PAIR)**: *Jailbreaking Black Box Large Language Models in Twenty Queries* (Chao et al.). The upstream project also references DrAttack and TAP research.
+
+AwayOut-AI is not presented as the original implementation of those research methods. Please cite the upstream project and the underlying research when using the framework in reports or publications.
 
 ---
 
@@ -233,7 +258,88 @@ AwayOut-AI writes the conversation to stdin and reads stdout as the model respon
 
 ---
 
-## 4. Complete first-test walkthrough
+## 4. Seed Prompt library: should you use one?
+
+**Recommended, but optional.** AwayOut-AI can generate directly from the Objective with no seeds. However, for repeatable security testing, a small set of high-quality original templates usually gives the Attacker a stronger starting point and reduces wasted iterations.
+
+Good seeds should capture reusable structure rather than one brittle payload. Useful qualities include:
+
+- a framing or reasoning pattern that has worked reliably;
+- clear alignment with a specific strategy such as `logical_appeal`, `authority`, or `roleplay`;
+- a `{objective}` placeholder instead of hard-coding one target request;
+- enough structure for the Attacker to mutate, but not so much text that every variant becomes near-identical;
+- provenance and test notes maintained outside the runtime file when you build a mature corpus.
+
+### Where to add seeds
+
+Default seed file:
+
+```text
+seeds/seeds.json
+```
+
+Schema:
+
+```json
+[
+  {
+    "name": "research_evaluation",
+    "strategy": "logical_appeal",
+    "template": "... {objective} ..."
+  }
+]
+```
+
+`strategy` can be:
+
+```text
+logical_appeal
+authority
+roleplay
+any
+```
+
+At startup, AwayOut-AI loads seeds matching the selected strategy, replaces `{objective}` with the current test Objective, and passes them to the Attacker as **reference starting points**. They are not sent directly to the target unless the Attacker independently produces the same text.
+
+The Attacker is explicitly instructed to preserve useful structure while adapting, combining, or substantially mutating the seeds using the current Objective, previous target response, Judge score, and human notes.
+
+Only the first several matching seeds are included in the Attacker context to avoid a very large seed library overwhelming the feedback signal.
+
+### Custom seed file
+
+Windows CMD:
+
+```bat
+set AWAYOUT_SEED_FILE=D:\security\my-seeds.json
+run_windows.bat
+```
+
+PowerShell:
+
+```powershell
+$env:AWAYOUT_SEED_FILE="D:\security\my-seeds.json"
+.\run_windows.bat
+```
+
+To run without seeds, point `AWAYOUT_SEED_FILE` to a nonexistent/empty library or remove/rename the default seed file. The Attacker will fall back to Objective-only generation.
+
+### Recommended corpus layout for larger teams
+
+For the first version, `seeds/seeds.json` is intentionally simple. As the corpus grows, a useful operational split is:
+
+```text
+seeds/
+├── seeds.json                 # curated active seeds used by default
+├── candidates/                # newly collected templates awaiting review
+├── archived/                  # retired/low-quality seeds
+└── notes/                     # provenance, target type, success rate, observations
+```
+
+Do not treat a large prompt dump as a high-quality seed library. Curate seeds based on reproducibility and test value.
+
+---
+
+## 5. Complete first-test walkthrough
 
 Run:
 
@@ -249,8 +355,9 @@ Then:
 4. Choose/type the Judge model.
 5. Enter the test Objective.
 6. Select an attack strategy.
-7. Set the maximum number of iterations.
-8. Set the Judge success threshold (default `7`).
+7. AwayOut-AI loads matching seeds from `seeds/seeds.json` if available.
+8. Set the maximum number of iterations.
+9. Set the Judge success threshold (default `7`).
 
 Each round works like this:
 
@@ -293,7 +400,7 @@ For target conversation state, choose:
 
 ---
 
-## 5. Built-in attack strategies
+## 6. Built-in attack strategies
 
 Current PAIR-style strategies:
 
@@ -301,11 +408,11 @@ Current PAIR-style strategies:
 - `authority`
 - `roleplay`
 
-The tester may switch strategy during a session.
+The tester may switch strategy during a session. When the strategy changes, AwayOut-AI reloads matching seeds for the new strategy.
 
 ---
 
-## 6. Session logs and review
+## 7. Session logs and review
 
 Logs are written to:
 
@@ -339,7 +446,7 @@ codeagent-http:model-b
 
 ---
 
-## 7. Environment diagnostics
+## 8. Environment diagnostics
 
 Run:
 
@@ -367,7 +474,7 @@ The default `codeagent_connector.py` intentionally returns a configuration error
 
 ---
 
-## 8. Troubleshooting
+## 9. Troubleshooting
 
 ### `Python was not found`
 
@@ -406,6 +513,10 @@ Install that SDK into the project's `.venv`, for example:
 
 If the dependency should be required for every user, add it to `requirements.txt`.
 
+### Seed file fails to load
+
+Validate that the file is UTF-8 JSON and its top level is a list. Every usable item should contain a non-empty `template` string. Invalid/missing seed files do not prevent Objective-only testing.
+
 ### Chinese text looks wrong in Windows console
 
 The BAT scripts use UTF-8 (`chcp 65001`). Windows Terminal is recommended if rendering is still incorrect.
@@ -416,7 +527,7 @@ Start Ollama or choose the CodeAgent Python Connector instead.
 
 ---
 
-## 9. Project layout
+## 10. Project layout
 
 ```text
 AwayOut-AI/
@@ -426,13 +537,16 @@ AwayOut-AI/
 │   ├── judge.py
 │   ├── ollama.py
 │   ├── providers.py
+│   ├── seeds.py
 │   └── session.py
-├── codeagent_connector.py      # user-editable connector template
-├── CODEAGENT_CONNECTOR.md      # connector contract
-├── doctor.py                   # environment diagnostics
+├── seeds/
+│   └── seeds.json             # curated Seed Prompt library
+├── codeagent_connector.py     # user-editable connector template
+├── CODEAGENT_CONNECTOR.md     # connector contract
+├── doctor.py                  # environment diagnostics
 ├── interactive_pair.py        # main CLI
-├── setup_windows.bat           # first-time Windows setup
-├── run_windows.bat             # normal Windows launcher
+├── setup_windows.bat          # first-time Windows setup
+├── run_windows.bat            # normal Windows launcher
 ├── requirements.txt
 ├── .gitignore
 └── README.md
@@ -441,29 +555,32 @@ AwayOut-AI/
 Provider architecture:
 
 ```text
-AttackerLLM ─┐
-             ├── ChatClient
-JudgeLLM ────┘      │
-                    ├── PythonConnectorClient   ← recommended CodeAgent adapter
-                    ├── OllamaClient
-                    ├── OpenAICompatibleClient
-                    └── CommandClient
+Seed Library ──────────────┐
+                           ↓
+                      AttackerLLM ─┐
+                                   ├── ChatClient
+                      JudgeLLM ────┘      │
+                                          ├── PythonConnectorClient
+                                          ├── OllamaClient
+                                          ├── OpenAICompatibleClient
+                                          └── CommandClient
 ```
 
 The PAIR attack loop is independent from the model runtime. Adding a new runtime only requires another provider implementation or a different user connector.
 
 ---
 
-## 10. Current scope
+## 11. Current scope
 
 This version intentionally keeps the target chatbot manual. AwayOut-AI does not automate browser authentication, cookies, target APIs, or UI interaction.
 
 Current focus:
 
+- optional Seed Prompt initialization;
 - iterative prompt generation;
 - human-in-the-loop target interaction;
 - Judge scoring;
 - feedback-driven refinement;
 - session logging and later review.
 
-Natural future extensions include attack-tree visualization, session replay/branching, browser adapters, and automated target connectors.
+Natural future extensions include attack-tree visualization, session replay/branching, browser adapters, automated target connectors, and seed effectiveness statistics.
