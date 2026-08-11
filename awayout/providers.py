@@ -19,7 +19,7 @@ class ChatClient(Protocol):
 
 
 class PythonConnectorClient:
-    """Load a user-written CodeAgent connector exposing invoke(...) -> {success, result}."""
+    """Load a user-written CodeAgent connector exposing invoke(message, ...) -> {success, result}."""
 
     def __init__(self, connector_path: str = "codeagent_connector.py"):
         self.connector_path = Path(connector_path).expanduser().resolve()
@@ -64,6 +64,16 @@ class PythonConnectorClient:
             raise RuntimeError("Optional list_models() must return list[str]")
         return [str(item) for item in value]
 
+    @staticmethod
+    def _flatten_messages(messages: list[dict[str, str]]) -> str:
+        blocks: list[str] = []
+        for item in messages:
+            role = str(item.get("role", "user")).upper()
+            content = str(item.get("content", "")).strip()
+            if content:
+                blocks.append(f"[{role}]\n{content}")
+        return "\n\n".join(blocks)
+
     def chat(
         self,
         messages: list[dict[str, str]],
@@ -72,8 +82,9 @@ class PythonConnectorClient:
         max_tokens: int = 1200,
     ) -> str:
         module = self._load()
+        message = self._flatten_messages(messages)
         response = module.invoke(
-            messages=messages,
+            message=message,
             model=model,
             temperature=temperature,
             max_tokens=max_tokens,
