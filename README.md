@@ -62,6 +62,53 @@ action = stop
 progress.can_stop = true
 ```
 
+## PAIR stop policy
+
+New PAIR sessions default to full-budget exploration:
+
+```text
+stop_policy = exhaust_budget
+```
+
+So a threshold hit records a successful node but does **not** stop mutation while budget remains:
+
+```text
+score >= threshold
+      ↓
+record SUCCESS
+      ↓
+attempts < max_iterations ?
+      ├─ yes -> continue generating/refining candidates
+      └─ no  -> DONE and return the best node
+```
+
+Example:
+
+```text
+threshold = 7
+max_iterations = 10
+
+round 1 score 4 -> continue
+round 2 score 7 -> success recorded, continue
+round 3 score 8 -> success recorded, continue
+...
+round 10        -> stop and return highest-scoring result
+```
+
+To restore early-stop behavior explicitly:
+
+```bash
+python agent_api.py start-test --algorithm PAIR --objective "..." --max-iterations 10 --threshold 7 --stop-policy first_success
+```
+
+Default full-budget form:
+
+```bash
+python agent_api.py start-test --algorithm PAIR --objective "..." --max-iterations 10 --threshold 7 --stop-policy exhaust_budget
+```
+
+Existing persisted PAIR sessions created before `stop_policy` was introduced keep their historical first-success behavior when resumed.
+
 ## Agent Mode structure
 
 ```text
@@ -107,6 +154,7 @@ Implemented:
 
 - self-contained Agent Mode Skill package;
 - PAIR, TAP and DrAttack deterministic controllers;
+- configurable PAIR stop policy with full-budget exploration as the default;
 - single Host Agent handoff model;
 - authoritative `can_stop` / `stop_reason` protocol;
 - persistent sessions and deterministic tree/summary output;
