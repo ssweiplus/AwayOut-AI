@@ -122,8 +122,8 @@ if defined HAS_UV (
 
 echo.
 echo [INFO] Model provider is selected when AwayOut-AI starts.
-echo        Recommended: CodeAgent Python Connector ^(edit codeagent_connector.py^).
-echo        Also supported: Ollama, CodeAgent/OpenAI-compatible HTTP, CodeAgent CLI.
+echo        CodeAgent uses Python Connector only ^(edit codeagent_connector.py^).
+echo        Ollama is also supported as an independent provider.
 
 echo.
 %PY_CMD% doctor.py
