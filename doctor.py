@@ -34,7 +34,7 @@ def main() -> int:
     try:
         import requests
     except ImportError:
-        fail("requests", "not installed; run setup_windows.bat or pip install -r requirements.txt")
+        fail("requests", "not installed; run setup_windows.bat or install requirements.txt")
         return 1
     else:
         ok("requests", requests.__version__)
@@ -87,40 +87,13 @@ def main() -> int:
     except Exception as exc:
         warn("Ollama", str(exc))
 
-    codeagent_base = os.getenv("CODEAGENT_BASE_URL", "").strip()
-    if codeagent_base:
-        try:
-            from awayout.providers import OpenAICompatibleClient
-
-            client = OpenAICompatibleClient(codeagent_base, os.getenv("CODEAGENT_API_KEY", ""))
-            if client.is_running():
-                provider_found = True
-                try:
-                    models = client.list_models()
-                except Exception:
-                    models = []
-                ok("CodeAgent HTTP", f"{codeagent_base}; models: {', '.join(models) if models else '(not listed)'}")
-            else:
-                warn("CodeAgent HTTP", f"configured but not reachable: {codeagent_base}")
-        except Exception as exc:
-            warn("CodeAgent HTTP", str(exc))
-
-    codeagent_command = os.getenv("CODEAGENT_COMMAND", "").strip()
-    if codeagent_command:
-        executable = codeagent_command.split()[0].strip('"')
-        if shutil.which(executable) or os.path.exists(executable):
-            provider_found = True
-            ok("CodeAgent CLI", codeagent_command)
-        else:
-            warn("CodeAgent CLI", f"configured but executable not found: {executable}")
-
     if not provider_found:
         warn(
             "Model provider",
-            "none detected automatically; configure codeagent_connector.py or choose another provider at startup",
+            "none detected automatically; configure codeagent_connector.py or start Ollama",
         )
 
-    print("\nBase environment is ready. Run interactive_pair.py or run_windows.bat.")
+    print("\nBase environment is ready. Run main.py or run_windows.bat.")
     return 0
 
 
