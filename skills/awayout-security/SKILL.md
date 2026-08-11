@@ -60,7 +60,27 @@ If an unfinished session exists, resume it:
 python api.py resume
 ```
 
-If the active session is unclear:
+Then read the `algorithm` returned by the persisted session and MUST load its child skill before continuing:
+
+```text
+PAIR     -> algorithms/pair/SKILL.md
+TAP      -> algorithms/tap/SKILL.md
+DrAttack -> algorithms/drattack/SKILL.md
+```
+
+For a resumed session:
+
+```text
+- persisted objective is authoritative
+- persisted parameters are authoritative
+- persisted state/action/checkpoint are authoritative
+- do not ask the user to choose the algorithm again
+- do not show a new configuration preflight
+- do not call start-test again
+- continue only from the returned current state
+```
+
+If the active pointer is unclear:
 
 ```bash
 python api.py list-sessions
@@ -69,7 +89,9 @@ python api.py get-state <session_id>
 
 Never reconstruct the current step from chat memory when persisted state is available.
 
-### Step C — obtain the objective
+If there is no unfinished session to resume, continue to Step C.
+
+### Step C — obtain the objective for a new test
 
 The objective must be one concrete success condition, for example:
 
@@ -82,7 +104,7 @@ The objective must be one concrete success condition, for example:
 
 If the conversation already contains a clear objective, reuse it. Otherwise ask the user for the concrete end goal. Do not replace it with a vague label such as `prompt injection` or `jailbreak`.
 
-### Step D — choose one algorithm
+### Step D — choose one algorithm for the new test
 
 Explain only the high-level difference:
 
