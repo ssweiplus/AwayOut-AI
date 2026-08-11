@@ -22,6 +22,17 @@ def fail(message: str, exit_code: int = 1) -> int:
     return emit({"success": False, "error": message}, exit_code)
 
 
+def read_text(value: str | None, file_path: str | None, label: str) -> str:
+    if value and file_path:
+        raise ValueError(f"use either --{label} or --{label}-file, not both")
+    if file_path:
+        path = Path(file_path)
+        if not path.is_file():
+            raise FileNotFoundError(f"{label} file not found: {file_path}")
+        return path.read_text(encoding="utf-8").strip()
+    return (value or "").strip()
+
+
 def cmd_start(args: argparse.Namespace, store: AgentSessionStore) -> int:
     algorithm = args.algorithm.upper()
     if algorithm != "PAIR":
@@ -40,21 +51,24 @@ def cmd_start(args: argparse.Namespace, store: AgentSessionStore) -> int:
 
 def cmd_candidate(args: argparse.Namespace, store: AgentSessionStore) -> int:
     controller = store.load(args.session_id)
-    result = controller.submit_candidate(args.prompt, args.strategy)
+    prompt = read_text(args.prompt, args.prompt_file, "prompt")
+    result = controller.submit_candidate(prompt, args.strategy)
     store.save(controller)
     return emit({"success": True, "result": result})
 
 
 def cmd_response(args: argparse.Namespace, store: AgentSessionStore) -> int:
     controller = store.load(args.session_id)
-    result = controller.submit_response(args.response)
+    response = read_text(args.response, args.response_file, "response")
+    result = controller.submit_response(response)
     store.save(controller)
     return emit({"success": True, "result": result})
 
 
 def cmd_judgement(args: argparse.Namespace, store: AgentSessionStore) -> int:
     controller = store.load(args.session_id)
-    result = controller.submit_judgement(args.score, args.reason)
+    reason = read_text(args.reason, args.reason_file, "reason")
+    result = controller.submit_judgement(args.score, reason)
     store.save(controller)
     return emit({"success": True, "result": result})
 
@@ -88,17 +102,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     candidate = sub.add_parser("submit-candidate")
     candidate.add_argument("session_id")
-    candidate.add_argument("--prompt", required=True)
+    candidate.add_argument("--prompt")
+    candidate.add_argument("--prompt-file")
     candidate.add_argument("--strategy", default=None)
 
     response = sub.add_parser("submit-response")
     response.add_argument("session_id")
-    response.add_argument("--response", required=True)
+    response.add_argument("--response")
+    response.add_argument("--response-file")
 
     judgement = sub.add_parser("submit-judgement")
     judgement.add_argument("session_id")
     judgement.add_argument("--score", type=int, required=True)
-    judgement.add_argument("--reason", required=True)
+    judgement.add_argument("--reason")
+    judgement.add_argument("--reason-file")
 
     for name in ("get-state", "get-tree", "get-summary"):
         item = sub.add_parser(name)
