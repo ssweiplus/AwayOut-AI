@@ -1,6 +1,6 @@
 # CodeAgent Connector
 
-AwayOut-AI can call a user-written Python connector instead of depending on a specific CodeAgent product/API.
+AwayOut-AI uses a user-written Python connector instead of depending on a specific CodeAgent product/API.
 
 Edit:
 
@@ -16,11 +16,11 @@ set CODEAGENT_CONNECTOR=D:\path\to\my_connector.py
 
 ## Required function
 
-The connector must define:
+The connector only needs to accept **one string message**:
 
 ```python
 def invoke(
-    messages: list[dict[str, str]],
+    message: str,
     model: str = "",
     temperature: float = 0.7,
     max_tokens: int = 1200,
@@ -28,14 +28,20 @@ def invoke(
     ...
 ```
 
-`messages` follows the usual chat-message shape:
+AwayOut-AI internally maintains multi-turn chat history for Attacker/Judge. Before calling your connector, that history is flattened into one string, for example:
 
-```python
-[
-    {"role": "system", "content": "..."},
-    {"role": "user", "content": "..."},
-]
+```text
+[SYSTEM]
+You are assisting an authorized AI security tester...
+
+[USER]
+Generate the first test prompt...
+
+[ASSISTANT]
+previous model output...
 ```
+
+Your CodeAgent does not need to understand `list[dict]`, chat roles, or AwayOut-AI's internal history structure. It only receives the final `message: str`.
 
 ## Required return format
 
@@ -57,7 +63,7 @@ Failure:
 }
 ```
 
-`result` may also be a dict/list; AwayOut-AI serializes it to JSON text.
+The normal and recommended `result` is a string.
 
 ## Minimal example
 
@@ -65,12 +71,20 @@ Failure:
 from typing import Any
 
 
-def invoke(messages, model="", temperature=0.7, max_tokens=1200) -> dict[str, Any]:
+def invoke(message: str, model="", temperature=0.7, max_tokens=1200) -> dict[str, Any]:
     try:
-        response = my_codeagent(messages=messages, model=model)
-        return {"success": True, "result": response}
+        response = my_codeagent(message)
+        return {"success": True, "result": str(response)}
     except Exception as exc:
         return {"success": False, "result": str(exc)}
+```
+
+If your local function itself already returns `success, result`, simply adapt it:
+
+```python
+def invoke(message: str, model="", temperature=0.7, max_tokens=1200):
+    success, result = my_codeagent(message)
+    return {"success": success, "result": result}
 ```
 
 ## Optional model discovery
@@ -88,35 +102,17 @@ If `list_models()` is absent, AwayOut-AI asks you to type the Attacker/Judge mod
 
 `codeagent_connector.py` is tracked by Git. Do not hard-code API keys, passwords, tokens, or sensitive internal endpoints into that file and commit them.
 
-Prefer environment variables:
+Prefer environment variables, or keep your real connector outside the repository and set `CODEAGENT_CONNECTOR` to its path.
 
-```python
-import os
+## Dependencies
 
-TOKEN = os.getenv("MY_CODEAGENT_TOKEN", "")
-```
+Install connector-specific dependencies into the same environment used to run AwayOut-AI.
 
-or keep your real connector outside the repository and use:
+For uv:
 
 ```bat
-set CODEAGENT_CONNECTOR=D:\private\my_codeagent_connector.py
+uv pip install --python .venv\Scripts\python.exe your-package
 ```
-
-## Dependencies used by your connector
-
-The base project installs only:
-
-```text
-requests>=2.31.0,<3.0.0
-```
-
-If your connector imports another SDK, install it into AwayOut-AI's local virtual environment:
-
-```powershell
-.\.venv\Scripts\python.exe -m pip install your-package
-```
-
-If every user of the repository needs that dependency, add it to `requirements.txt`.
 
 ## Runtime
 
@@ -128,50 +124,20 @@ run_windows.bat
 
 or:
 
-```bash
-python interactive_pair.py
+```bat
+.venv\Scripts\python.exe main.py
 ```
 
-Choose:
+Choose `CodeAgent Python Connector` as the model provider.
 
-```text
-1. CodeAgent Python Connector
-```
-
-The connector is used by both the Attacker and Judge roles. The target chatbot remains manual copy/paste.
+The connector is used by both Attacker and Judge. The target chatbot remains manual copy/paste.
 
 ## Diagnostics
 
 Run:
 
-```powershell
-.\.venv\Scripts\python.exe doctor.py
+```bat
+.venv\Scripts\python.exe doctor.py
 ```
 
-`doctor.py` verifies that the connector can be loaded and that `invoke()` exists. It intentionally does not call `invoke()` because a health check should not trigger a real model request or consume tokens/resources.
-
-Therefore, a connector can be reported as loadable while the actual CodeAgent call inside `invoke()` is still unconfigured. The first real Attacker/Judge call will surface the connector's failure message.
-
-## Common errors
-
-### `Connector file not found`
-
-Check `CODEAGENT_CONNECTOR` or use the default `codeagent_connector.py` in the repository root.
-
-### `Connector must define callable invoke(...)`
-
-Make sure the file defines a top-level `invoke()` function with the required contract.
-
-### `CodeAgent connector failed: ...`
-
-This means your connector returned:
-
-```python
-{"success": False, "result": "..."}
-```
-
-The text in `result` is shown directly so you can debug the underlying CodeAgent call.
-
-### Import error for your private SDK
-
-Install that SDK into `.venv`, not necessarily into global Python.
+`doctor.py` verifies that the connector can be loaded and that `invoke()` exists. It intentionally does not perform a real model request.
