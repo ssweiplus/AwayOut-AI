@@ -6,6 +6,7 @@ from awayout.attacker import AttackerLLM, STRATEGIES
 from awayout.judge import JudgeLLM
 from awayout.ollama import OllamaClient
 from awayout.providers import ChatClient, CommandClient, OpenAICompatibleClient, PythonConnectorClient
+from awayout.seeds import load_seed_prompts
 from awayout.session import IterationRecord, TestSession
 
 SEP = "=" * 72
@@ -193,6 +194,17 @@ def run() -> None:
         return
 
     strategy = choose_strategy()
+    seed_file = os.getenv("AWAYOUT_SEED_FILE", "seeds/seeds.json").strip()
+    try:
+        seed_prompts = load_seed_prompts(seed_file, objective, strategy) if seed_file else []
+    except Exception as exc:
+        print(f"Seed 模板加载失败: {exc}")
+        seed_prompts = []
+    if seed_prompts:
+        print(f"已加载 {len(seed_prompts)} 条 Seed 模板: {seed_file}")
+    else:
+        print("未加载 Seed 模板，Attacker 将直接从 Objective 开始。")
+
     max_iterations = ask_int("最大轮数", 10, 1, 100)
     threshold = ask_int("成功阈值", 7, 1, 10)
 
@@ -201,6 +213,7 @@ def run() -> None:
         client=client,
         model=attacker_model,
         strategy=strategy,
+        seed_prompts=seed_prompts,
     )
     judge = JudgeLLM(client=client, model=judge_model, threshold=threshold)
     session = TestSession(
@@ -244,6 +257,11 @@ def run() -> None:
             break
         if chosen == "s":
             new_strategy = choose_strategy(attacker.strategy)
+            try:
+                attacker.seed_prompts = load_seed_prompts(seed_file, objective, new_strategy) if seed_file else []
+            except Exception as exc:
+                print(f"切换策略后 Seed 模板加载失败: {exc}")
+                attacker.seed_prompts = []
             attacker.switch_strategy(new_strategy)
             tester_note = f"Tester switched strategy to {new_strategy}."
             continue
