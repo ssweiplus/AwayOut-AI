@@ -57,7 +57,8 @@ if errorlevel 1 goto :fail
 
 echo.
 echo [INFO] Model provider is selected when AwayOut-AI starts.
-echo        Supported: Ollama, CodeAgent/OpenAI-compatible HTTP, CodeAgent CLI.
+echo        Recommended: CodeAgent Python Connector ^(edit codeagent_connector.py^).
+echo        Also supported: Ollama, CodeAgent/OpenAI-compatible HTTP, CodeAgent CLI.
 
 echo.
 "!VENV_PY!" doctor.py
