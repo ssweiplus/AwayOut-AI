@@ -12,37 +12,45 @@ It is adapted from the open-source project **Hcxgraphics/JailBreak-AI**:
 
 ---
 
-## 1. Recommended architecture: Skill outside, deterministic algorithms inside
+## 1. Architecture
 
-AwayOut-AI is organized around the Agent Skill as the primary entry point:
+AwayOut-AI is now organized around the Agent Skill as the primary entry point:
 
 ```text
-OpenCode / Codex / other Agent
-          │
-          ▼
+User
+  ↓
+OpenCode / Codex / other Host Agent CLI
+  ↓
 skills/awayout-security/SKILL.md
-          │
-          ▼
-   algorithms/<name>/
-          │
-          ▼
- deterministic controller
-          │
-     ┌────┴────┐
-     ▼         ▼
-   common     state/tree
+  ↓
+algorithm controller
+  ↓
+state + action + handoff
+  ↓
+Host Agent performs the requested reasoning/user interaction
+  ↓
+result submitted back to AwayOut
 ```
 
-The **Agent does not choose the workflow order**. The algorithm controller owns:
+The tester stays in the **same host Agent CLI** throughout Agent Mode.
+
+The controller owns:
 
 - algorithm state transitions;
 - iteration limits;
 - success thresholds;
 - allowed next actions;
-- session persistence;
-- tree/summary generation.
+- persistence;
+- tree/summary generation;
+- stop conditions.
 
-The Agent only handles language-heavy steps such as candidate wording, semantic analysis, judgement reasoning, and presenting results to the user.
+The Host Agent owns:
+
+- candidate wording;
+- semantic analysis;
+- judgement reasoning;
+- interaction with the tester;
+- result presentation.
 
 If the Agent calls a step out of order, AwayOut rejects it.
 
@@ -53,21 +61,21 @@ If the Agent calls a step out of order, AwayOut rejects it.
 ```text
 skills/
 └── awayout-security/
-    ├── SKILL.md                 # top-level Agent instructions
+    ├── SKILL.md                 # complete Agent instructions
     ├── api.py                   # real Agent API implementation
     ├── common/
     │   └── store.py             # deterministic session persistence
     └── algorithms/
         ├── pair/
-        │   ├── SKILL.md         # PAIR-specific Agent instructions
+        │   ├── SKILL.md         # PAIR-specific instructions
         │   └── controller.py    # deterministic PAIR state machine
         ├── tap/
-        │   └── SKILL.md         # reserved until controller is implemented
+        │   └── SKILL.md         # reserved
         └── drattack/
-            └── SKILL.md         # reserved until controller is implemented
+            └── SKILL.md         # reserved
 ```
 
-The root-level `agent_api.py` is only a compatibility wrapper that forwards execution to:
+Root `agent_api.py` is only a compatibility wrapper for:
 
 ```text
 skills/awayout-security/api.py
@@ -78,12 +86,12 @@ skills/awayout-security/api.py
 ## 3. Algorithms
 
 ```text
-1. PAIR     - feedback-driven iterative refinement      [Agent Mode available]
-2. TAP      - Tree of Attacks with Pruning             [reserved]
-3. DrAttack - prompt decomposition and reconstruction  [reserved]
+PAIR      Agent Mode implemented
+TAP       reserved
+DrAttack  reserved
 ```
 
-PAIR Agent Mode is implemented as this fixed state machine:
+PAIR is fixed as:
 
 ```text
 NEED_CANDIDATE
@@ -95,59 +103,96 @@ NEED_JUDGEMENT
 DONE or NEED_CANDIDATE
 ```
 
-TAP and DrAttack remain reserved until their deterministic controllers are implemented. The Agent must not emulate them by inventing its own workflow.
+TAP and DrAttack must not be emulated manually until their deterministic controllers are implemented.
 
 ---
 
 ## 4. Agent Mode
 
-The Agent-facing skill is:
+Use:
 
 ```text
 skills/awayout-security/SKILL.md
 ```
 
-The high-level tool entry remains:
+as the full operational guide.
 
-```text
-agent_api.py
-```
+Do not start `main.py` or `interactive_pair.py` while using Agent Mode.
 
-### Start a PAIR test
+### Start
 
 ```bat
 .venv\Scripts\python.exe agent_api.py start-test --algorithm PAIR --objective "<objective>"
 ```
 
-The command returns JSON with:
+The returned JSON includes:
 
 ```text
 session_id
 state
 action
+handoff
 ```
 
-The Agent must obey the returned `state` and `action`.
+`handoff` explicitly returns control to the Host Agent.
 
-### Submit a generated candidate
+### Attacker boundary
+
+When AwayOut returns:
+
+```text
+state = NEED_CANDIDATE
+action = generate_candidate
+handoff.kind = generate_candidate
+```
+
+AwayOut **does not call an Attacker LLM**. The Host Agent generates the candidate itself and submits it:
 
 ```bat
 .venv\Scripts\python.exe agent_api.py submit-candidate <session_id> --prompt "<candidate>" --strategy "logical_appeal"
 ```
 
-### Submit the real target response
+For multiline text:
 
 ```bat
-.venv\Scripts\python.exe agent_api.py submit-response <session_id> --response "<target response>"
+.venv\Scripts\python.exe agent_api.py submit-candidate <session_id> --prompt-file prompt.txt --strategy "logical_appeal"
 ```
 
-### Submit judgement
+### Target interaction boundary
+
+When AwayOut returns `WAIT_TARGET_RESPONSE`, the Host Agent shows the candidate to the tester in the same Agent CLI. The tester sends it to the authorized target and pastes the real response back into the Host Agent.
+
+Submit it:
+
+```bat
+.venv\Scripts\python.exe agent_api.py submit-response <session_id> --response-file response.txt
+```
+
+Short responses may use `--response` directly.
+
+### Judge boundary
+
+When AwayOut returns:
+
+```text
+state = NEED_JUDGEMENT
+action = judge_response
+handoff.kind = judge_response
+```
+
+AwayOut **does not call a Judge LLM**. The Host Agent applies the returned rubric itself and submits the score/reason:
 
 ```bat
 .venv\Scripts\python.exe agent_api.py submit-judgement <session_id> --score 5 --reason "<reason>"
 ```
 
-The controller decides whether another iteration is allowed or the test is finished.
+For multiline reasons:
+
+```bat
+.venv\Scripts\python.exe agent_api.py submit-judgement <session_id> --score 5 --reason-file reason.txt
+```
+
+The controller decides whether to continue or stop.
 
 ### Inspect state / tree / summary
 
@@ -157,21 +202,44 @@ The controller decides whether another iteration is allowed or the test is finis
 .venv\Scripts\python.exe agent_api.py get-summary <session_id>
 ```
 
-Agent-mode state is stored under:
-
-```text
-.awayout-agent/
-```
-
-This directory is ignored by Git.
+Agent state is stored under `.awayout-agent/` and ignored by Git.
 
 ---
 
-## 5. Standalone Mode
+## 5. Agent Mode user experience
 
-The existing Python-driven PAIR implementation is retained for compatibility.
+```text
+User remains in OpenCode
+        ↓
+OpenCode calls AwayOut
+        ↓
+AwayOut returns handoff
+        ↓
+OpenCode performs the requested language step
+        ↓
+OpenCode calls AwayOut again
+```
 
-Unified standalone entry:
+The user never needs to enter an AwayOut sub-console.
+
+---
+
+## 6. Standalone Mode
+
+The old Python-driven runtime is retained only for compatibility:
+
+```text
+main.py
+interactive_pair.py
+awayout/attacker.py
+awayout/judge.py
+```
+
+Standalone PAIR may directly call Attacker/Judge models and present its own CLI.
+
+This path is separate from Agent Mode.
+
+Run standalone only when explicitly desired:
 
 ```bat
 .venv\Scripts\python.exe main.py
@@ -183,23 +251,11 @@ or:
 run_windows.bat
 ```
 
-`main.py` keeps the three-algorithm menu. PAIR is runnable; TAP and DrAttack are currently reserved.
-
-Standalone PAIR still uses the existing `AttackerLLM` / `JudgeLLM` path. Agent Mode is the recommended direction when using OpenCode/Codex-style agents.
-
 ---
 
-## 6. CodeAgent integration for Standalone Mode
+## 7. CodeAgent integration for Standalone Mode
 
-CodeAgent has exactly one supported integration mode: **Python Connector**.
-
-Default file:
-
-```text
-codeagent_connector.py
-```
-
-Connector input is a single string:
+CodeAgent has one supported integration mode: **Python Connector**.
 
 ```python
 def invoke(message: str, model="", temperature=0.7, max_tokens=1200):
@@ -209,97 +265,74 @@ def invoke(message: str, model="", temperature=0.7, max_tokens=1200):
     }
 ```
 
-AwayOut internally owns multi-message chat history. `PythonConnectorClient` converts it to one string before calling your connector.
+See `CODEAGENT_CONNECTOR.md`.
 
-For the full contract, see `CODEAGENT_CONNECTOR.md`.
+Agent Mode does not need this connector because the Host Agent itself performs candidate generation and judgement reasoning.
 
 ---
 
-## 7. Windows installation
+## 8. Installation
 
 Requirements:
 
-- Windows 10/11
 - Python 3.10+
+- Host Agent capable of running shell commands
 
-### Automatic setup
-
-```bat
-setup_windows.bat
-```
-
-Environment priority:
-
-```text
-1. active Conda environment
-2. existing .venv
-3. create .venv
-```
-
-If `uv` is available, setup uses `uv pip` and does not require pip inside a uv-created `.venv`.
-
-### Manual installation with uv
+### uv on Windows
 
 ```bat
-cd D:\path\to\AwayOut-AI
 uv venv .venv
 uv pip install --python .venv\Scripts\python.exe -r requirements.txt
-.venv\Scripts\python.exe doctor.py
+.venv\Scripts\python.exe agent_api.py --help
 ```
 
-If `.venv` already exists, skip `uv venv .venv`.
+### uv on Linux/macOS
 
-### Manual installation with standard Python
-
-```bat
-python -m venv .venv
-.venv\Scripts\python.exe -m pip install -r requirements.txt
-.venv\Scripts\python.exe doctor.py
+```bash
+uv venv .venv
+uv pip install --python .venv/bin/python -r requirements.txt
+.venv/bin/python agent_api.py --help
 ```
 
-### Manual installation with Conda
+### Existing Python
 
-```bat
-conda create -n awayout python=3.11 -y
-conda activate awayout
+```bash
 python -m pip install -r requirements.txt
-python doctor.py
+python agent_api.py --help
 ```
 
----
-
-## 8. Responsibility boundary
+For complete installation, usage, recovery, and exception handling instructions, read:
 
 ```text
-Skill
-- tells the Agent how to use AwayOut
-- tells the Agent which algorithm-specific instructions to follow
-- tells the Agent to obey returned state/action
-
-Algorithm Controller
-- what step happens next
-- whether a transition is legal
-- thresholds and limits
-- stop conditions
-
-Common deterministic code
-- persistence
-- session loading/saving
-- shared state utilities
-
-Agent / LLM
-- candidate wording
-- semantic interpretation
-- judgement reasoning
-- user interaction
-- result presentation
+skills/awayout-security/SKILL.md
 ```
-
-The design goal is to keep non-deterministic language work in the Agent while preventing the Agent from freely changing the security-testing algorithm.
 
 ---
 
-## 9. Full project layout
+## 9. Error recovery
+
+Common recovery rule:
+
+```bat
+.venv\Scripts\python.exe agent_api.py get-state <session_id>
+```
+
+The controller is authoritative. Do not reconstruct workflow state from chat history.
+
+The Skill documents handling for:
+
+- invalid transitions;
+- missing sessions;
+- reserved algorithms;
+- invalid scores;
+- empty prompt/response;
+- missing temporary files;
+- shell quoting issues;
+- Host Agent context loss.
+
+---
+
+## 10. Full project layout
 
 ```text
 AwayOut-AI/
@@ -318,16 +351,16 @@ AwayOut-AI/
 │           └── drattack/
 │               └── SKILL.md
 ├── awayout/
-│   ├── attacker.py            # standalone engine
-│   ├── judge.py               # standalone engine
+│   ├── attacker.py            # standalone only
+│   ├── judge.py               # standalone only
 │   ├── ollama.py
 │   ├── providers.py
-│   ├── seeds.py               # reserved extension point
-│   └── session.py             # standalone session format
-├── agent_api.py               # compatibility wrapper -> skill api.py
-├── main.py                    # standalone unified entry
-├── interactive_pair.py        # standalone PAIR implementation
-├── codeagent_connector.py
+│   ├── seeds.py
+│   └── session.py
+├── agent_api.py               # compatibility wrapper
+├── main.py                    # standalone
+├── interactive_pair.py        # standalone
+├── codeagent_connector.py     # standalone CodeAgent connector
 ├── CODEAGENT_CONNECTOR.md
 ├── doctor.py
 ├── setup_windows.bat
@@ -338,25 +371,25 @@ AwayOut-AI/
 
 ---
 
-## 10. Current scope
+## 11. Current scope
 
-Implemented now:
+Implemented:
 
 - skill-centric Agent architecture;
-- Agent-friendly high-level API;
-- deterministic PAIR controller inside the Skill package;
+- deterministic PAIR controller;
+- explicit Host Agent handoff protocol;
+- Attacker/Judge model-call boundaries cut in Agent Mode;
 - enforced state transitions;
-- persistent Agent sessions under Skill common code;
-- deterministic tree and summary output;
-- algorithm-specific Skill instructions;
-- existing standalone PAIR retained;
-- CodeAgent Python Connector retained for standalone mode;
-- Windows / uv / Conda setup support.
+- persistent sessions;
+- deterministic tree/summary output;
+- file-based input for long prompt/response/reason text;
+- comprehensive Skill documentation;
+- standalone compatibility retained.
 
-Reserved next:
+Reserved:
 
-- deterministic TAP controller under `skills/awayout-security/algorithms/tap/`;
-- deterministic DrAttack controller under `skills/awayout-security/algorithms/drattack/`;
-- richer branching/tree visualization;
-- optional MCP wrapper around the stable Agent API operations;
+- deterministic TAP controller;
+- deterministic DrAttack controller;
+- richer attack-tree visualization;
+- optional MCP wrapper;
 - optional curated Seed Prompt library.
