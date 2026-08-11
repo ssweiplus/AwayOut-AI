@@ -36,6 +36,19 @@ class TapController:
     current_ids: list[str] = field(default_factory=list)
     stop_reason: str = ""
 
+    def __post_init__(self) -> None:
+        self.objective = self.objective.strip()
+        if not self.objective:
+            raise ValueError("objective cannot be empty")
+        if int(self.branch_factor) < 1:
+            raise ValueError("branch_factor must be at least 1")
+        if int(self.max_depth) < 1:
+            raise ValueError("max_depth must be at least 1")
+        if int(self.width) < 1:
+            raise ValueError("width must be at least 1")
+        if not 1 <= int(self.threshold) <= 10:
+            raise ValueError("threshold must be between 1 and 10")
+
     def _require(self, expected: State) -> None:
         if self.state != expected:
             raise ValueError(f"Invalid transition: current state is {self.state}, expected {expected}")
@@ -156,8 +169,11 @@ class TapController:
             elif parent_id not in allowed:
                 raise ValueError(f"invalid parent_id: {parent_id}")
             node = TapNode(
-                node_id=f"N-{uuid4().hex[:8]}", parent_id=parent_id, depth=self.depth,
-                prompt=prompt, improvement=str(item.get("improvement", "")).strip(),
+                node_id=f"N-{uuid4().hex[:8]}",
+                parent_id=parent_id,
+                depth=self.depth,
+                prompt=prompt,
+                improvement=str(item.get("improvement", "")).strip(),
             )
             self.nodes.append(node)
             self.current_ids.append(node.node_id)
@@ -233,6 +249,7 @@ class TapController:
         children: dict[str | None, list[TapNode]] = {}
         for n in self.nodes:
             children.setdefault(n.parent_id, []).append(n)
+
         def walk(parent: str | None, prefix: str) -> None:
             items = children.get(parent, [])
             for i, n in enumerate(items):
@@ -242,19 +259,58 @@ class TapController:
                 suffix = " SUCCESS" if n.status == "success" else (" PRUNED" if n.pruned else "")
                 lines.append(f"{prefix}{mark} {n.node_id} [{score}/10] d={n.depth}{suffix}")
                 walk(n.node_id, prefix + ("   " if last else "│  "))
+
         walk(None, "")
         return "\n".join(lines)
 
     def summary(self) -> dict:
         scored = [n for n in self.nodes if n.score is not None]
         best = max(scored, key=lambda n: n.score or 0) if scored else None
-        return {"session_id": self.session_id, "algorithm": "TAP", "state": self.state, "objective": self.objective, "depth_reached": self.depth, "total_branches": len(self.nodes), "threshold": self.threshold, "success": any(n.status == "success" for n in self.nodes), "stop_reason": self.stop_reason, "best_node": asdict(best) if best else None, "tree": self.tree_text()}
+        return {
+            "session_id": self.session_id,
+            "algorithm": "TAP",
+            "state": self.state,
+            "objective": self.objective,
+            "depth_reached": self.depth,
+            "total_branches": len(self.nodes),
+            "threshold": self.threshold,
+            "success": any(n.status == "success" for n in self.nodes),
+            "stop_reason": self.stop_reason,
+            "best_node": asdict(best) if best else None,
+            "tree": self.tree_text(),
+        }
 
     def to_dict(self) -> dict:
-        return {"session_id": self.session_id, "algorithm": "TAP", "objective": self.objective, "branch_factor": self.branch_factor, "max_depth": self.max_depth, "width": self.width, "threshold": self.threshold, "state": self.state, "depth": self.depth, "active_parent_ids": self.active_parent_ids, "current_ids": self.current_ids, "stop_reason": self.stop_reason, "nodes": [asdict(n) for n in self.nodes]}
+        return {
+            "session_id": self.session_id,
+            "algorithm": "TAP",
+            "objective": self.objective,
+            "branch_factor": self.branch_factor,
+            "max_depth": self.max_depth,
+            "width": self.width,
+            "threshold": self.threshold,
+            "state": self.state,
+            "depth": self.depth,
+            "active_parent_ids": self.active_parent_ids,
+            "current_ids": self.current_ids,
+            "stop_reason": self.stop_reason,
+            "nodes": [asdict(n) for n in self.nodes],
+        }
 
     @classmethod
     def from_dict(cls, data: dict) -> "TapController":
-        obj = cls(objective=str(data["objective"]), branch_factor=int(data.get("branch_factor", 2)), max_depth=int(data.get("max_depth", 5)), width=int(data.get("width", 2)), threshold=int(data.get("threshold", 7)), session_id=str(data["session_id"]), state=str(data.get("state", "NEED_BRANCHES")), depth=int(data.get("depth", 1)))
-        obj.active_parent_ids = list(data.get("active_parent_ids", [])); obj.current_ids = list(data.get("current_ids", [])); obj.stop_reason = str(data.get("stop_reason", "")); obj.nodes = [TapNode(**n) for n in data.get("nodes", [])]
+        obj = cls(
+            objective=str(data["objective"]),
+            branch_factor=int(data.get("branch_factor", 2)),
+            max_depth=int(data.get("max_depth", 5)),
+            width=int(data.get("width", 2)),
+            threshold=int(data.get("threshold", 7)),
+            session_id=str(data["session_id"]),
+            state=str(data.get("state", "NEED_BRANCHES")),
+            depth=int(data.get("depth", 1)),
+        )
+        obj.active_parent_ids = list(data.get("active_parent_ids", []))
+        obj.current_ids = list(data.get("current_ids", []))
+        obj.stop_reason = str(data.get("stop_reason", ""))
+        obj.nodes = [TapNode(**n) for n in data.get("nodes", [])]
         return obj
