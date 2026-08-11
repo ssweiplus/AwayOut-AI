@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from skills.awayout_security.algorithms.pair.controller import PairController
+from algorithms.pair.controller import PairController
 
 
 class AgentSessionStore:
