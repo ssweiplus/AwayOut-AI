@@ -59,6 +59,7 @@ def main() -> int:
         from algorithms.tap.controller import TapController
         from algorithms.drattack.controller import DrAttackController
         from common.store import AgentSessionStore
+        from api import OPERATOR_MARKER, algorithm_selection_contract, enrich
     except Exception as exc:
         fail("Imports", str(exc))
         return 1
@@ -85,6 +86,22 @@ def main() -> int:
         fail("Controller startup", str(exc))
         return 1
     ok("Controller startup", "objective guards present on all algorithms")
+
+    try:
+        intro = algorithm_selection_contract()
+        required_output = intro.get("required_user_output", {})
+        options = required_output.get("options", [])
+        names = [item.get("algorithm") for item in options if isinstance(item, dict)]
+        if intro.get("must_show_to_user") is not True:
+            raise RuntimeError("algorithm introduction is not marked mandatory")
+        if names != ["PAIR", "TAP", "DrAttack"]:
+            raise RuntimeError("algorithm introduction does not expose PAIR/TAP/DrAttack in order")
+        if not required_output.get("selection_prompt"):
+            raise RuntimeError("algorithm introduction missing selection prompt")
+    except Exception as exc:
+        fail("Algorithm intro contract", str(exc))
+        return 1
+    ok("Algorithm intro contract", "PAIR + TAP + DrAttack must be shown")
 
     try:
         expect_value_error(
@@ -164,6 +181,41 @@ def main() -> int:
         fail("PAIR stop policy", str(exc))
         return 1
     ok("PAIR stop policy", "exhaust_budget + first_success")
+
+    try:
+        with tempfile.TemporaryDirectory() as directory:
+            store = AgentSessionStore(directory)
+
+            pair = PairController(objective="pair-interaction-check")
+            pair.submit_candidate("pair-candidate")
+            store.save(pair)
+
+            tap = TapController(objective="tap-interaction-check")
+            tap.submit_branches([{"prompt": "tap-candidate"}])
+            tap.submit_offtopic_review(list(tap.current_ids))
+            store.save(tap)
+
+            drattack = DrAttackController(objective="drattack-interaction-check")
+            drattack.submit_baseline_prompt("drattack-baseline")
+            store.save(drattack)
+
+            for name, controller in (("PAIR", pair), ("TAP", tap), ("DrAttack", drattack)):
+                action = enrich(controller, store, controller.next_action())
+                handoff = action.get("handoff", {})
+                required_user_output = handoff.get("required_user_output", {}) if isinstance(handoff, dict) else {}
+                if handoff.get("kind") != "human_target_interaction":
+                    raise RuntimeError(f"{name} did not reach human_target_interaction")
+                if handoff.get("must_show_to_user") is not True:
+                    raise RuntimeError(f"{name} human interaction is not marked mandatory")
+                if required_user_output.get("show_current_test_prompts") is not True:
+                    raise RuntimeError(f"{name} does not require showing current test prompts")
+                reminder = str(required_user_output.get("operator_reminder", ""))
+                if OPERATOR_MARKER not in reminder:
+                    raise RuntimeError(f"{name} operator reminder missing marker")
+    except Exception as exc:
+        fail("Human interaction contract", str(exc))
+        return 1
+    ok("Human interaction contract", "mandatory on PAIR + TAP + DrAttack")
 
     try:
         with tempfile.TemporaryDirectory() as directory:
