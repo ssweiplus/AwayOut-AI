@@ -15,7 +15,38 @@ from algorithms.tap.controller import TapController
 from common.store import AgentSessionStore
 
 OPERATOR_MARKER = "[[AWAYOUT:OPERATOR]]"
-OPERATOR_REMINDER = f"如需发表测试意见，请以 {OPERATOR_MARKER} 开头。"
+OPERATOR_REMINDER = f"人工意见（可选）：如需发表测试意见，请以 {OPERATOR_MARKER} 开头。"
+
+
+def algorithm_selection_contract() -> dict:
+    return {
+        "must_show_to_user": True,
+        "instruction": (
+            "Display all algorithm options and the selection prompt to the user before asking them to choose. "
+            "Do not silently select an algorithm or omit an option."
+        ),
+        "required_user_output": {
+            "title": "请选择本次测试使用的算法：",
+            "options": [
+                {
+                    "algorithm": "PAIR",
+                    "summary": "单路径迭代优化：每轮测试一个 Prompt，根据目标系统响应继续改进。",
+                    "best_for": "适合先从一个方向开始、逐轮优化；不确定时推荐从 PAIR 开始。",
+                },
+                {
+                    "algorithm": "TAP",
+                    "summary": "多路径树搜索：同时探索多个 Prompt 分支，评分后剪枝并保留较优方向。",
+                    "best_for": "适合希望并行探索多个方向、自动保留较优分支的测试。",
+                },
+                {
+                    "algorithm": "DrAttack",
+                    "summary": "语义拆解与重构：先拆解目标，再生成替代表达并用多种结构重构 Prompt。",
+                    "best_for": "适合希望通过语义变换和不同重构结构探索测试路径的场景。",
+                },
+            ],
+            "selection_prompt": "请选择 PAIR / TAP / DrAttack。若不确定，可先选 PAIR。",
+        },
+    }
 
 
 def emit(payload: dict, exit_code: int = 0) -> int:
@@ -125,6 +156,21 @@ def enrich(controller, store: AgentSessionStore, result: dict) -> dict:
         "show_operator_reminder": needs_target_interaction,
     }
     if needs_target_interaction:
+        required_user_output = {
+            "show_current_test_prompts": True,
+            "target_response_request": (
+                "请测试当前 handoff 中待测试的 Prompt，并粘贴实际目标系统响应。"
+            ),
+            "operator_reminder": OPERATOR_REMINDER,
+        }
+        handoff["must_show_to_user"] = True
+        handoff["required_user_output"] = required_user_output
+        handoff["instruction"] = (
+            f"{str(handoff.get('instruction', '')).strip()} "
+            "MUST display every item in handoff.required_user_output before waiting for user input. "
+            "Do not omit the operator reminder."
+        ).strip()
+        payload["handoff"] = handoff
         payload["user_reminder"] = OPERATOR_REMINDER
 
     feedback = store.get_feedback(controller.session_id)
@@ -143,6 +189,10 @@ def enrich(controller, store: AgentSessionStore, result: dict) -> dict:
 
 def emit_state(controller, store: AgentSessionStore) -> int:
     return emit({"success": True, "result": enrich(controller, store, controller.next_action())})
+
+
+def cmd_describe_algorithms(args: argparse.Namespace, store: AgentSessionStore) -> int:
+    return emit({"success": True, "result": algorithm_selection_contract()})
 
 
 def cmd_start(args: argparse.Namespace, store: AgentSessionStore) -> int:
@@ -303,6 +353,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--store", default=".awayout-agent", help="agent session directory")
     sub = parser.add_subparsers(dest="command", required=True)
 
+    sub.add_parser("describe-algorithms")
+
     start = sub.add_parser("start-test")
     start.add_argument("--algorithm", default="PAIR")
     start.add_argument("--objective", required=True)
@@ -364,6 +416,7 @@ def main() -> int:
     args = parser.parse_args()
     store = AgentSessionStore(args.store)
     handlers = {
+        "describe-algorithms": cmd_describe_algorithms,
         "start-test": cmd_start,
         "submit-candidate": cmd_candidate,
         "submit-response": cmd_response,
