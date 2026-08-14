@@ -41,6 +41,7 @@ def main() -> int:
         "api.py",
         "doctor.py",
         "common/store.py",
+        "common/presenter.py",
         "algorithms/pair/SKILL.md",
         "algorithms/pair/controller.py",
         "algorithms/tap/SKILL.md",
@@ -52,7 +53,7 @@ def main() -> int:
     if missing:
         fail("Skill files", ", ".join(missing))
         return 1
-    ok("Skill files", "top router + install guide + 3 algorithm skills")
+    ok("Skill files", "top router + presenter + install guide + 3 algorithm skills")
 
     try:
         from algorithms.pair.controller import PairController
@@ -186,7 +187,7 @@ def main() -> int:
         with tempfile.TemporaryDirectory() as directory:
             store = AgentSessionStore(directory)
 
-            pair = PairController(objective="pair-interaction-check")
+            pair = PairController(objective="pair-interaction-check", max_iterations=3)
             pair.submit_candidate("pair-candidate")
             store.save(pair)
 
@@ -199,7 +200,23 @@ def main() -> int:
             drattack.submit_baseline_prompt("drattack-baseline")
             store.save(drattack)
 
-            for name, controller in (("PAIR", pair), ("TAP", tap), ("DrAttack", drattack)):
+            pair_action = enrich(pair, store, pair.next_action())
+            pair_handoff = pair_action.get("handoff", {})
+            pair_presentation = pair_handoff.get("presentation", {}) if isinstance(pair_handoff, dict) else {}
+            rendered = str(pair_presentation.get("rendered_text", ""))
+            if pair_handoff.get("kind") != "human_target_interaction":
+                raise RuntimeError("PAIR did not reach human_target_interaction")
+            if pair_handoff.get("must_show_to_user") is not True:
+                raise RuntimeError("PAIR human interaction is not marked mandatory")
+            if pair_presentation.get("must_show_verbatim") is not True:
+                raise RuntimeError("PAIR presentation is not marked verbatim")
+            if pair_presentation.get("copy_target") != "prompt_block_only":
+                raise RuntimeError("PAIR copy target is not prompt-only")
+            for expected in ("PAIR 第 1/3 轮", "本轮策略", "pair-candidate", "人工意见（可选）", OPERATOR_MARKER):
+                if expected not in rendered:
+                    raise RuntimeError(f"PAIR presentation missing: {expected}")
+
+            for name, controller in (("TAP", tap), ("DrAttack", drattack)):
                 action = enrich(controller, store, controller.next_action())
                 handoff = action.get("handoff", {})
                 required_user_output = handoff.get("required_user_output", {}) if isinstance(handoff, dict) else {}
@@ -215,7 +232,7 @@ def main() -> int:
     except Exception as exc:
         fail("Human interaction contract", str(exc))
         return 1
-    ok("Human interaction contract", "mandatory on PAIR + TAP + DrAttack")
+    ok("Human interaction contract", "PAIR formatted template + TAP/DrAttack mandatory interaction")
 
     try:
         with tempfile.TemporaryDirectory() as directory:
