@@ -17,7 +17,11 @@ def _fenced_text(value: str) -> str:
     return f"{fence}text\n{value}\n{fence}"
 
 
-def render_pair_target_interaction(action: dict) -> dict:
+def _quote_lines(value: str) -> list[str]:
+    return [f"> {line}" if line else ">" for line in value.splitlines()]
+
+
+def render_pair_target_interaction(action: dict, latest_feedback: dict | None = None) -> dict:
     """Render a PAIR WAIT_TARGET_RESPONSE payload for direct user display.
 
     The result intentionally separates metadata from the copyable prompt so a
@@ -34,6 +38,7 @@ def render_pair_target_interaction(action: dict) -> dict:
     strategy = _text(node.get("strategy") or action.get("strategy") or guidance.get("id")) or "unknown"
     description = _text(guidance.get("description"))
     prompt = _text(node.get("prompt"))
+    feedback_text = _text((latest_feedback or {}).get("text"))
 
     if not prompt:
         raise ValueError("PAIR target interaction template requires a non-empty prompt")
@@ -47,6 +52,12 @@ def render_pair_target_interaction(action: dict) -> dict:
     ]
     if description:
         lines.append(f"- 说明：{description}")
+
+    lines.extend(["", "### 当前人工意见"])
+    if feedback_text:
+        lines.extend(_quote_lines(feedback_text))
+    else:
+        lines.append("暂无。")
 
     lines.extend([
         "",
@@ -80,5 +91,6 @@ def render_pair_target_interaction(action: dict) -> dict:
         "iteration": iteration,
         "max_iterations": maximum,
         "operator_marker": OPERATOR_MARKER,
+        "latest_feedback": feedback_text or None,
         "rendered_text": "\n".join(lines),
     }
