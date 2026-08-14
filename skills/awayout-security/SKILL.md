@@ -15,7 +15,8 @@ awayout-security/
 ├── api.py
 ├── doctor.py
 ├── common/
-│   └── store.py
+│   ├── store.py
+│   └── presenter.py
 └── algorithms/
     ├── pair/
     │   ├── SKILL.md
@@ -236,26 +237,36 @@ Whenever:
 handoff.kind = human_target_interaction
 ```
 
-the API upgrades that handoff with:
+the API sets:
 
 ```text
 handoff.must_show_to_user = true
+```
+
+There are two display modes.
+
+If the handoff contains:
+
+```text
+handoff.presentation.must_show_verbatim = true
+handoff.presentation.rendered_text = <text>
+```
+
+then `rendered_text` is the authoritative user-facing message. The host Agent MUST display it exactly once and verbatim. Do not rebuild, merge, summarize or paraphrase the layout from surrounding fields. This mode is currently used by PAIR target-response rounds so the Prompt copy block stays isolated from strategy metadata and operator guidance.
+
+Otherwise, the handoff uses the structured fallback contract:
+
+```text
 handoff.required_user_output.show_current_test_prompts = true
 handoff.required_user_output.target_response_request
 handoff.required_user_output.operator_reminder
 ```
 
-The host Agent MUST display the current prompt/prompt set plus every textual item in `handoff.required_user_output` before waiting for user input.
+Display the current prompt/prompt set plus every textual item in `handoff.required_user_output` before waiting for user input.
 
-Do not summarize away or omit the operator reminder. `user_reminder` is retained for compatibility, but `handoff.required_user_output` is the authoritative display contract.
+`user_reminder` is retained for compatibility. Do not duplicate it when it is already included inside a verbatim presentation template.
 
-The required reminder is:
-
-```text
-人工意见（可选）：如需发表测试意见，请以 [[AWAYOUT:OPERATOR]] 开头。
-```
-
-Do not show this contract on purely internal generation, relevance review, scoring or pruning steps.
+Do not show target-interaction output on purely internal generation, relevance review, scoring or pruning steps.
 
 ### Checkpoint and resume
 
