@@ -172,7 +172,7 @@ class PairController:
 
     def next_action(self) -> dict:
         scored = [n for n in self.nodes if n.score is not None]
-        best_score = max((n.score or 0) for n in scored) if scored else None
+        best_score = max((n.score or 0 for n in scored), default=None)
         successful_attempts = sum(1 for n in scored if (n.score or 0) >= self.threshold)
 
         payload: dict = {
@@ -239,6 +239,7 @@ class PairController:
                     "to": "host_agent",
                     "kind": "human_target_interaction",
                     "instruction": "Present the prompt in the current host-agent CLI and collect the real target response. Do not announce completion.",
+                    "strategy_guidance": self._strategy_guidance(),
                     "objective_guard": self._objective_guard(),
                 },
             })
