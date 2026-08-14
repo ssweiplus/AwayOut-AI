@@ -141,6 +141,9 @@ def enrich(controller, store: AgentSessionStore, result: dict) -> dict:
     payload = dict(result)
     payload["checkpoint"] = checkpoint(controller, payload)
 
+    feedback = store.get_feedback(controller.session_id)
+    latest_feedback = feedback[-1] if feedback else None
+
     handoff = payload.get("handoff") if isinstance(payload.get("handoff"), dict) else {}
     needs_target_interaction = handoff.get("kind") == "human_target_interaction"
     payload["interaction_protocol"] = {
@@ -159,7 +162,7 @@ def enrich(controller, store: AgentSessionStore, result: dict) -> dict:
         handoff["must_show_to_user"] = True
 
         if isinstance(controller, PairController):
-            presentation = render_pair_target_interaction(payload)
+            presentation = render_pair_target_interaction(payload, latest_feedback)
             handoff["presentation"] = presentation
             handoff["required_user_output"] = {
                 "rendered_text": presentation["rendered_text"],
@@ -192,7 +195,6 @@ def enrich(controller, store: AgentSessionStore, result: dict) -> dict:
         payload["handoff"] = handoff
         payload["user_reminder"] = OPERATOR_REMINDER
 
-    feedback = store.get_feedback(controller.session_id)
     if feedback:
         payload["human_feedback"] = {
             "latest": feedback[-1],
