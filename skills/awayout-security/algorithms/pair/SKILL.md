@@ -313,7 +313,7 @@ If `progress.stop_policy=exhaust_budget`, continue generating while `progress.ca
 
 ### `WAIT_TARGET_RESPONSE` / `human_target_interaction`
 
-PAIR target-interaction output is rendered by `../../common/presenter.py`. Do not manually assemble the round message from `node`, `strategy`, `user_reminder` or chat memory.
+PAIR target-interaction output is rendered by `../../common/presenter.py`. Do not manually assemble the round message from `node`, `strategy`, `human_feedback`, `user_reminder` or chat memory.
 
 After `api.py` enriches this state, it returns:
 
@@ -326,14 +326,17 @@ handoff.presentation.rendered_text = <complete user-facing round message>
 
 The host Agent MUST display `handoff.presentation.rendered_text` exactly once and verbatim before waiting for user input. Do not paraphrase it, merge sections, add strategy text inside the Prompt code block, or build a second competing round layout.
 
-The rendered layout deliberately separates metadata from the copy target:
+The rendered layout deliberately separates metadata, current human feedback and the copy target:
 
-```text
+````markdown
 ## PAIR 第 1/10 轮
 
 ### 本轮策略
-- 策略：logical_appeal
+- 策略：`logical_appeal`
 - 说明：...
+
+### 当前人工意见
+暂无。
 
 ---
 
@@ -357,9 +360,11 @@ The rendered layout deliberately separates metadata from the copy target:
 [[AWAYOUT:OPERATOR]]
 <你的意见>
 ```
-```
+````
 
-The fenced Prompt block is the only copy target for target-system testing. Strategy information and operator guidance must stay outside that block.
+If persisted operator feedback exists, `当前人工意见` shows the latest feedback as a Markdown quote. It remains outside the Prompt block.
+
+The fenced Prompt block is the only copy target for target-system testing. Strategy information, existing operator feedback and operator instructions must stay outside that block.
 
 An operator-marked user message is feedback only; persist it and remain in `WAIT_TARGET_RESPONSE`.
 
