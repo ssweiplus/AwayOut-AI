@@ -25,7 +25,8 @@ awayout-security/
 ├── api.py
 ├── doctor.py
 ├── common/
-│   └── store.py
+│   ├── store.py
+│   └── presenter.py
 └── algorithms/
     ├── pair/
     │   ├── SKILL.md
@@ -38,7 +39,7 @@ awayout-security/
         └── controller.py
 ```
 
-Do not copy only `SKILL.md`; the controllers, API and store are part of the skill runtime.
+Do not copy only `SKILL.md`; the controllers, API, presenter and store are part of the skill runtime.
 
 Do not mix files from different revisions.
 
@@ -64,6 +65,7 @@ The doctor checks:
 - PAIR/TAP/DrAttack imports
 - controller startup
 - core deterministic behavior checks
+- PAIR user-facing presentation template
 - session read/write persistence
 ```
 
