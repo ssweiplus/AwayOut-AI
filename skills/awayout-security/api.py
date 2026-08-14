@@ -12,9 +12,9 @@ if str(SKILL_ROOT) not in sys.path:
 from algorithms.drattack.controller import DrAttackController
 from algorithms.pair.controller import PairController
 from algorithms.tap.controller import TapController
+from common.presenter import OPERATOR_MARKER, render_pair_target_interaction
 from common.store import AgentSessionStore
 
-OPERATOR_MARKER = "[[AWAYOUT:OPERATOR]]"
 OPERATOR_REMINDER = f"人工意见（可选）：如需发表测试意见，请以 {OPERATOR_MARKER} 开头。"
 
 
@@ -156,20 +156,39 @@ def enrich(controller, store: AgentSessionStore, result: dict) -> dict:
         "show_operator_reminder": needs_target_interaction,
     }
     if needs_target_interaction:
-        required_user_output = {
-            "show_current_test_prompts": True,
-            "target_response_request": (
-                "请测试当前 handoff 中待测试的 Prompt，并粘贴实际目标系统响应。"
-            ),
-            "operator_reminder": OPERATOR_REMINDER,
-        }
         handoff["must_show_to_user"] = True
-        handoff["required_user_output"] = required_user_output
-        handoff["instruction"] = (
-            f"{str(handoff.get('instruction', '')).strip()} "
-            "MUST display every item in handoff.required_user_output before waiting for user input. "
-            "Do not omit the operator reminder."
-        ).strip()
+
+        if isinstance(controller, PairController):
+            presentation = render_pair_target_interaction(payload)
+            handoff["presentation"] = presentation
+            handoff["required_user_output"] = {
+                "rendered_text": presentation["rendered_text"],
+                "display_rule": (
+                    "Display rendered_text exactly once and verbatim. Do not merge metadata into the Prompt block, "
+                    "do not paraphrase the template, and do not add text inside the copyable Prompt block."
+                ),
+            }
+            handoff["instruction"] = (
+                f"{str(handoff.get('instruction', '')).strip()} "
+                "MUST display handoff.presentation.rendered_text verbatim before waiting for user input. "
+                "The user should copy only the Prompt code block."
+            ).strip()
+            payload["presentation"] = presentation
+        else:
+            required_user_output = {
+                "show_current_test_prompts": True,
+                "target_response_request": (
+                    "请测试当前 handoff 中待测试的 Prompt，并粘贴实际目标系统响应。"
+                ),
+                "operator_reminder": OPERATOR_REMINDER,
+            }
+            handoff["required_user_output"] = required_user_output
+            handoff["instruction"] = (
+                f"{str(handoff.get('instruction', '')).strip()} "
+                "MUST display every item in handoff.required_user_output before waiting for user input. "
+                "Do not omit the operator reminder."
+            ).strip()
+
         payload["handoff"] = handoff
         payload["user_reminder"] = OPERATOR_REMINDER
 
