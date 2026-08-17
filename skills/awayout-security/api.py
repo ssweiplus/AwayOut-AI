@@ -16,6 +16,7 @@ from common.presenter import (
     OPERATOR_MARKER,
     render_drattack_strategy_interaction,
     render_pair_target_interaction,
+    render_tap_branch_interaction,
 )
 from common.store import AgentSessionStore
 
@@ -111,13 +112,19 @@ def checkpoint(controller, action: dict) -> dict:
         labels = {
             "NEED_BRANCHES": "generate branches",
             "NEED_OFFTOPIC_REVIEW": "review branch relevance",
-            "WAIT_TARGET_RESPONSES": "collect target responses",
+            "WAIT_TARGET_RESPONSES": "collect one branch response",
             "NEED_SCORES": "score and rank branches",
             "DONE": "finished",
         }
+        current = f"TAP depth {depth}/{maximum}: {labels.get(state, state)}."
+        if state == "WAIT_TARGET_RESPONSES":
+            progress = action.get("progress", {})
+            completed = int(progress.get("target_responses_completed", 0))
+            total = int(progress.get("target_responses_total", 0))
+            current = f"TAP depth {depth}/{maximum}: {completed}/{total} branch responses completed; waiting for the next single response."
         return {
             "step": action_name,
-            "display": f"TAP depth {depth}/{maximum}: {labels.get(state, state)}.",
+            "display": current,
             "next": action.get("handoff", {}).get("instruction", "Follow the returned action."),
         }
 
@@ -145,6 +152,23 @@ def checkpoint(controller, action: dict) -> dict:
         }
 
     return {"step": action_name, "display": state, "next": "Follow the returned action."}
+
+
+def _attach_verbatim_presentation(payload: dict, handoff: dict, presentation: dict, input_subject: str) -> None:
+    handoff["presentation"] = presentation
+    handoff["required_user_output"] = {
+        "rendered_text": presentation["rendered_text"],
+        "input_mode": presentation.get("input_mode", "single_plain_text_response"),
+        "display_rule": (
+            "Display rendered_text exactly once and verbatim. Wait for one plain-text target response only. "
+            "Do not ask the user for JSON and do not display other pending prompts yet."
+        ),
+    }
+    handoff["instruction"] = (
+        f"{str(handoff.get('instruction', '')).strip()} "
+        f"MUST display handoff.presentation.rendered_text verbatim. Accept exactly one unmarked user message as the current {input_subject} response, submit it, then show the next returned presentation if any."
+    ).strip()
+    payload["presentation"] = presentation
 
 
 def enrich(controller, store: AgentSessionStore, result: dict) -> dict:
@@ -188,23 +212,13 @@ def enrich(controller, store: AgentSessionStore, result: dict) -> dict:
             ).strip()
             payload["presentation"] = presentation
 
+        elif isinstance(controller, TapController) and controller.state == "WAIT_TARGET_RESPONSES":
+            presentation = render_tap_branch_interaction(payload, latest_feedback)
+            _attach_verbatim_presentation(payload, handoff, presentation, "TAP branch")
+
         elif isinstance(controller, DrAttackController) and controller.state == "WAIT_STRATEGY_RESPONSES":
             presentation = render_drattack_strategy_interaction(payload, latest_feedback)
-            handoff["presentation"] = presentation
-            handoff["required_user_output"] = {
-                "rendered_text": presentation["rendered_text"],
-                "input_mode": "single_plain_text_response",
-                "display_rule": (
-                    "Display rendered_text exactly once and verbatim. Wait for one plain-text target response only. "
-                    "Do not ask the user for JSON and do not display other strategy prompts yet."
-                ),
-            }
-            handoff["instruction"] = (
-                f"{str(handoff.get('instruction', '')).strip()} "
-                "MUST display handoff.presentation.rendered_text verbatim. Accept exactly one unmarked user message "
-                "as the current strategy response, submit it, then show the next returned strategy presentation."
-            ).strip()
-            payload["presentation"] = presentation
+            _attach_verbatim_presentation(payload, handoff, presentation, "DrAttack strategy")
 
         else:
             required_user_output = {
@@ -298,6 +312,18 @@ def cmd_response(args: argparse.Namespace, store: AgentSessionStore) -> int:
     return emit_state(controller, store)
 
 
+def cmd_tap_response(args: argparse.Namespace, store: AgentSessionStore) -> int:
+    controller = store.load(args.session_id)
+    if not isinstance(controller, TapController):
+        raise ValueError("submit-tap-response is TAP-only")
+    if controller.state != "WAIT_TARGET_RESPONSES":
+        raise ValueError("TAP is not waiting for a branch response")
+    response = read_text(args.response, args.response_file, "response")
+    controller.submit_response(response)
+    store.save(controller)
+    return emit_state(controller, store)
+
+
 def cmd_drattack_response(args: argparse.Namespace, store: AgentSessionStore) -> int:
     controller = store.load(args.session_id)
     if not isinstance(controller, DrAttackController):
@@ -341,7 +367,7 @@ def cmd_result(args: argparse.Namespace, store: AgentSessionStore) -> int:
         elif state == "NEED_OFFTOPIC_REVIEW":
             controller.submit_offtopic_review(list(data.get("keep_node_ids", [])))
         elif state == "WAIT_TARGET_RESPONSES":
-            controller.submit_responses(dict(data.get("responses", {})))
+            controller.submit_response(str(data.get("response", "")))
         elif state == "NEED_SCORES":
             controller.submit_scores(dict(data.get("scores", {})))
         else:
@@ -447,6 +473,11 @@ def build_parser() -> argparse.ArgumentParser:
     response.add_argument("--response")
     response.add_argument("--response-file")
 
+    tap_response = sub.add_parser("submit-tap-response")
+    tap_response.add_argument("session_id")
+    tap_response.add_argument("--response")
+    tap_response.add_argument("--response-file")
+
     dr_response = sub.add_parser("submit-drattack-response")
     dr_response.add_argument("session_id")
     dr_response.add_argument("--response")
@@ -487,6 +518,7 @@ def main() -> int:
         "start-test": cmd_start,
         "submit-candidate": cmd_candidate,
         "submit-response": cmd_response,
+        "submit-tap-response": cmd_tap_response,
         "submit-drattack-response": cmd_drattack_response,
         "submit-judgement": cmd_judgement,
         "submit-result": cmd_result,
