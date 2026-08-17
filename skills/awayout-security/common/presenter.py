@@ -32,6 +32,16 @@ def _operator_section() -> list[str]:
     ]
 
 
+def _current_feedback(lines: list[str], latest_feedback: dict | None) -> str:
+    feedback_text = _text((latest_feedback or {}).get("text"))
+    lines.extend(["", "### 当前人工意见"])
+    if feedback_text:
+        lines.extend(_quote_lines(feedback_text))
+    else:
+        lines.append("暂无。")
+    return feedback_text
+
+
 def render_pair_target_interaction(action: dict, latest_feedback: dict | None = None) -> dict:
     """Render a PAIR WAIT_TARGET_RESPONSE payload for direct user display."""
     node = action.get("node") if isinstance(action.get("node"), dict) else {}
@@ -44,7 +54,6 @@ def render_pair_target_interaction(action: dict, latest_feedback: dict | None = 
     strategy = _text(node.get("strategy") or action.get("strategy") or guidance.get("id")) or "unknown"
     description = _text(guidance.get("description"))
     prompt = _text(node.get("prompt"))
-    feedback_text = _text((latest_feedback or {}).get("text"))
 
     if not prompt:
         raise ValueError("PAIR target interaction template requires a non-empty prompt")
@@ -59,11 +68,7 @@ def render_pair_target_interaction(action: dict, latest_feedback: dict | None = 
     if description:
         lines.append(f"- 说明：{description}")
 
-    lines.extend(["", "### 当前人工意见"])
-    if feedback_text:
-        lines.extend(_quote_lines(feedback_text))
-    else:
-        lines.append("暂无。")
+    feedback_text = _current_feedback(lines, latest_feedback)
 
     lines.extend([
         "",
@@ -97,6 +102,70 @@ def render_pair_target_interaction(action: dict, latest_feedback: dict | None = 
     }
 
 
+def render_tap_branch_interaction(action: dict, latest_feedback: dict | None = None) -> dict:
+    """Render one surviving TAP branch prompt at a time."""
+    current = action.get("current_branch") if isinstance(action.get("current_branch"), dict) else {}
+    progress = action.get("progress") if isinstance(action.get("progress"), dict) else {}
+    index = int(current.get("index") or 0)
+    total = int(current.get("total") or 0)
+    depth = int(current.get("depth") or progress.get("depth") or 0)
+    max_depth = int(progress.get("max_depth") or 0)
+    node_id = _text(current.get("node_id")) or "unknown"
+    improvement = _text(current.get("improvement"))
+    prompt = _text(current.get("prompt"))
+
+    if not prompt:
+        raise ValueError("TAP branch interaction template requires a non-empty prompt")
+
+    title = f"## TAP 深度 {depth}/{max_depth} · 分支测试 {index}/{total}" if max_depth else f"## TAP 深度 {depth} · 分支测试 {index}/{total}"
+    lines = [
+        title,
+        "",
+        "### 当前分支",
+        f"- 分支：`{node_id}`",
+        "- 说明：本次只测试这一条；提交响应后会自动进入当前深度的下一个存活分支。",
+    ]
+    if improvement:
+        lines.append(f"- 变异方向：{improvement}")
+
+    feedback_text = _current_feedback(lines, latest_feedback)
+
+    lines.extend([
+        "",
+        "---",
+        "",
+        "### 请只复制下面的 Prompt",
+        "",
+        _fenced_text(prompt),
+        "",
+        "---",
+        "",
+        "### 下一步",
+        "1. 只复制上面的 Prompt 代码块内容到目标系统。",
+        "2. 将这一次的目标系统实际响应直接粘贴回来即可。",
+        "3. 不需要填写 JSON，也不需要填写 node_id；AwayOut 会自动绑定到当前分支。",
+        "4. 当前深度所有存活分支响应收集完成后，才会进入统一评分和剪枝。",
+        "",
+    ])
+    lines.extend(_operator_section())
+
+    return {
+        "format": "markdown",
+        "must_show_verbatim": True,
+        "copy_target": "prompt_block_only",
+        "input_mode": "single_plain_text_response",
+        "node_id": node_id,
+        "branch_index": index,
+        "branch_total": total,
+        "depth": depth,
+        "max_depth": max_depth,
+        "prompt": prompt,
+        "operator_marker": OPERATOR_MARKER,
+        "latest_feedback": feedback_text or None,
+        "rendered_text": "\n".join(lines),
+    }
+
+
 def render_drattack_strategy_interaction(action: dict, latest_feedback: dict | None = None) -> dict:
     """Render one DrAttack reconstructed strategy prompt at a time."""
     current = action.get("current_strategy") if isinstance(action.get("current_strategy"), dict) else {}
@@ -104,7 +173,6 @@ def render_drattack_strategy_interaction(action: dict, latest_feedback: dict | N
     total = int(current.get("total") or 0)
     strategy = _text(current.get("strategy")) or "unknown"
     prompt = _text(current.get("prompt"))
-    feedback_text = _text((latest_feedback or {}).get("text"))
 
     if not prompt:
         raise ValueError("DrAttack strategy interaction template requires a non-empty prompt")
@@ -116,13 +184,8 @@ def render_drattack_strategy_interaction(action: dict, latest_feedback: dict | N
         "### 当前策略",
         f"- 策略：`{strategy}`",
         "- 说明：本次只测试这一条；提交响应后会自动进入下一个策略。",
-        "",
-        "### 当前人工意见",
     ]
-    if feedback_text:
-        lines.extend(_quote_lines(feedback_text))
-    else:
-        lines.append("暂无。")
+    feedback_text = _current_feedback(lines, latest_feedback)
 
     lines.extend([
         "",
