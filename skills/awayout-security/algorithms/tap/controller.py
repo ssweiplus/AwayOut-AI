@@ -34,6 +34,7 @@ class TapController:
     nodes: list[TapNode] = field(default_factory=list)
     active_parent_ids: list[str] = field(default_factory=list)
     current_ids: list[str] = field(default_factory=list)
+    current_response_index: int = 0
     stop_reason: str = ""
 
     def __post_init__(self) -> None:
@@ -71,7 +72,17 @@ class TapController:
         wanted = set(ids)
         return [n for n in self.nodes if n.node_id in wanted]
 
+    @property
+    def current_response_node(self) -> TapNode | None:
+        if self.state != "WAIT_TARGET_RESPONSES":
+            return None
+        active = [n for n in self._nodes(self.current_ids) if not n.pruned]
+        if not 0 <= self.current_response_index < len(active):
+            return None
+        return active[self.current_response_index]
+
     def next_action(self) -> dict:
+        active_current = [n for n in self._nodes(self.current_ids) if not n.pruned]
         base = {
             "session_id": self.session_id,
             "algorithm": "TAP",
@@ -83,6 +94,9 @@ class TapController:
                 "branch_factor": self.branch_factor,
                 "width": self.width,
                 "threshold": self.threshold,
+                "target_responses_completed": sum(1 for node in active_current if node.response),
+                "target_responses_total": len(active_current),
+                "current_response_index": self.current_response_index,
                 "can_stop": self.state == "DONE",
             },
         }
@@ -115,20 +129,31 @@ class TapController:
                 },
             })
         elif self.state == "WAIT_TARGET_RESPONSES":
+            node = self.current_response_node
+            if node is None:
+                raise ValueError("current TAP response node not found")
             base.update({
-                "action": "ask_user_to_test_prompts",
-                "nodes": [asdict(n) for n in self._nodes(self.current_ids) if not n.pruned],
+                "action": "ask_user_to_test_prompt",
+                "current_branch": {
+                    "index": self.current_response_index + 1,
+                    "total": len(active_current),
+                    "node_id": node.node_id,
+                    "parent_id": node.parent_id,
+                    "depth": node.depth,
+                    "improvement": node.improvement,
+                    "prompt": node.prompt,
+                },
                 "handoff": {
                     "to": "host_agent",
                     "kind": "human_target_interaction",
-                    "instruction": "Present each surviving prompt in the current host-agent CLI, collect the real target response for each node, then submit them together.",
+                    "instruction": "Present only the current surviving TAP branch prompt, collect one real target response as plain user text, persist it, then advance to the next surviving branch.",
                     "objective_guard": self._objective_guard(),
                 },
             })
         elif self.state == "NEED_SCORES":
             base.update({
                 "action": "score_branches",
-                "nodes": [asdict(n) for n in self._nodes(self.current_ids) if not n.pruned],
+                "nodes": active_current,
                 "rubric": {"min": 1, "max": 10, "success_threshold": self.threshold},
                 "handoff": {
                     "to": "host_agent",
@@ -137,6 +162,7 @@ class TapController:
                     "objective_guard": self._objective_guard(),
                 },
             })
+            base["nodes"] = [asdict(n) for n in active_current]
         else:
             base.update({
                 "action": "stop",
@@ -159,6 +185,7 @@ class TapController:
             raise ValueError(f"too many branches: max {self.branch_factor}")
         allowed = set(self.active_parent_ids)
         self.current_ids = []
+        self.current_response_index = 0
         for item in branches:
             prompt = str(item.get("prompt", "")).strip()
             if not prompt:
@@ -191,6 +218,7 @@ class TapController:
                 node.pruned = True
                 node.status = "pruned_offtopic"
         self.current_ids = [nid for nid in self.current_ids if nid in keep]
+        self.current_response_index = 0
         if not self.current_ids:
             self.stop_reason = "all_branches_pruned"
             self.state = "DONE"
@@ -198,15 +226,35 @@ class TapController:
             self.state = "WAIT_TARGET_RESPONSES"
         return self.next_action()
 
-    def submit_responses(self, responses: dict[str, str]) -> dict:
+    def submit_response(self, response: str) -> dict:
         self._require("WAIT_TARGET_RESPONSES")
-        if set(responses) != set(self.current_ids):
+        value = str(response).strip()
+        if not value:
+            raise ValueError("response cannot be empty")
+        node = self.current_response_node
+        if node is None:
+            raise ValueError("current TAP response node not found")
+        node.response = value
+        active = [n for n in self._nodes(self.current_ids) if not n.pruned]
+        if self.current_response_index + 1 < len(active):
+            self.current_response_index += 1
+        else:
+            self.state = "NEED_SCORES"
+        return self.next_action()
+
+    def submit_responses(self, responses: dict[str, str]) -> dict:
+        """Compatibility helper for non-human callers; normal Agent UX uses submit_response()."""
+        self._require("WAIT_TARGET_RESPONSES")
+        active = [n for n in self._nodes(self.current_ids) if not n.pruned]
+        expected = {node.node_id for node in active}
+        if set(responses) != expected:
             raise ValueError("responses must contain exactly the current surviving node ids")
-        for node in self._nodes(self.current_ids):
+        for node in active:
             value = str(responses[node.node_id]).strip()
             if not value:
                 raise ValueError(f"response cannot be empty for {node.node_id}")
             node.response = value
+        self.current_response_index = max(0, len(active) - 1)
         self.state = "NEED_SCORES"
         return self.next_action()
 
@@ -241,6 +289,7 @@ class TapController:
             self.active_parent_ids = [n.node_id for n in survivors]
             self.depth += 1
             self.current_ids = []
+            self.current_response_index = 0
             self.state = "NEED_BRANCHES"
         return self.next_action()
 
@@ -293,6 +342,7 @@ class TapController:
             "depth": self.depth,
             "active_parent_ids": self.active_parent_ids,
             "current_ids": self.current_ids,
+            "current_response_index": self.current_response_index,
             "stop_reason": self.stop_reason,
             "nodes": [asdict(n) for n in self.nodes],
         }
@@ -311,6 +361,7 @@ class TapController:
         )
         obj.active_parent_ids = list(data.get("active_parent_ids", []))
         obj.current_ids = list(data.get("current_ids", []))
+        obj.current_response_index = int(data.get("current_response_index", 0))
         obj.stop_reason = str(data.get("stop_reason", ""))
         obj.nodes = [TapNode(**n) for n in data.get("nodes", [])]
         return obj
