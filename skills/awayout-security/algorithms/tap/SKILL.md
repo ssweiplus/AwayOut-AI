@@ -29,10 +29,10 @@ Typical choices:
 ```text
 2  [default] low manual workload, easy to compare
 3  broader search
-4  more exploration, but substantially more target testing per depth
+4  more exploration
 ```
 
-Higher values increase diversity and the number of prompts the tester may need to run.
+Higher values increase branch diversity. Human target testing remains sequential: the tester sees one branch Prompt at a time rather than all branches at once.
 
 ### `max_depth`
 
@@ -118,7 +118,8 @@ TAP 配置：
 1. 每层分支 branch_factor
    当前：2【默认】
    可设置：>=1
-   常用：2（轻量）/ 3（更广）/ 4（探索更多，但人工测试量更大）
+   常用：2（轻量）/ 3（更广）/ 4（探索更多）
+   说明：即使有多个分支，人工测试时仍一次只展示 1 个 Prompt。
 
 2. 最大深度 max_depth
    当前：5【默认】
@@ -155,11 +156,16 @@ python api.py start-test --algorithm TAP --objective "..." --branch-factor 2 --m
 NEED_BRANCHES
   -> NEED_OFFTOPIC_REVIEW
   -> WAIT_TARGET_RESPONSES
+       branch 1 response
+       branch 2 response
+       ...
   -> NEED_SCORES
   -> NEED_BRANCHES or DONE
 ```
 
-Code owns branch/depth state, legal parents, pruning, ranking, top-W retention, threshold and completion.
+TAP remains a multi-branch tree search. Only the human target-interaction layer is sequential.
+
+Code owns branch/depth state, legal parents, pruning, ranking, top-W retention, response cursor, threshold and completion.
 
 ## 5. Objective drift guard
 
@@ -177,7 +183,7 @@ Generate up to the returned `expected_count` candidate branches. At depth > 1, u
 
 Each branch should be materially different enough to justify parallel exploration while preserving the original objective.
 
-Submit structure:
+Internal submit structure:
 
 ```json
 {
@@ -195,31 +201,107 @@ Judge only whether each branch still serves the original objective. Do not redef
 {"keep_node_ids": ["N-..."]}
 ```
 
-AwayOut deterministically prunes the rest.
+AwayOut deterministically prunes the rest, resets the human-response cursor and enters `WAIT_TARGET_RESPONSES` when at least one branch survives.
 
 ### `WAIT_TARGET_RESPONSES` / `human_target_interaction`
 
-Present every surviving prompt with its node ID and collect the real target-system response for each node.
+Human interaction is sequential. The user must never be asked to manage the branch-response map, node IDs, or JSON.
 
-Every time prompts are handed to the tester, show the API-provided operator reminder:
+For every step, the controller returns exactly one current branch:
 
 ```text
-如需发表测试意见，请以 [[AWAYOUT:OPERATOR]] 开头。
+current_branch.index
+current_branch.total
+current_branch.node_id
+current_branch.depth
+current_branch.improvement
+current_branch.prompt
 ```
 
-Operator-marked comments are persisted as feedback and do not count as any node's target response. Remain in the same state until all required real responses are collected.
+`../../common/presenter.py` renders this as the mandatory user-facing message:
 
-Submit:
-
-```json
-{"responses": {"N-...": "actual target response"}}
+```text
+handoff.presentation.format = markdown
+handoff.presentation.must_show_verbatim = true
+handoff.presentation.copy_target = prompt_block_only
+handoff.presentation.input_mode = single_plain_text_response
+handoff.presentation.rendered_text = <complete current-branch message>
 ```
 
-The response keys must exactly match the current surviving node IDs.
+The host Agent MUST display `handoff.presentation.rendered_text` exactly once and verbatim, then wait for one unmarked user message containing only the current target-system response.
+
+Typical layout:
+
+````markdown
+## TAP 深度 2/5 · 分支测试 1/2
+
+### 当前分支
+- 分支：`N-...`
+- 说明：本次只测试这一条；提交响应后会自动进入当前深度的下一个存活分支。
+- 变异方向：...
+
+### 当前人工意见
+暂无。
+
+---
+
+### 请只复制下面的 Prompt
+
+```text
+<当前唯一需要测试的 Prompt>
+```
+
+---
+
+### 下一步
+1. 只复制上面的 Prompt 到目标系统。
+2. 将这一次的实际响应直接粘贴回来。
+3. 不需要填写 JSON，也不需要填写 node_id。
+4. 当前深度所有存活分支响应收集完成后，才进入统一评分和剪枝。
+````
+
+Use:
+
+```bash
+python api.py submit-tap-response <session_id> --response "<actual target response>"
+```
+
+For multiline content:
+
+```bash
+python api.py submit-tap-response <session_id> --response-file response.txt
+```
+
+After one response is persisted:
+
+```text
+more surviving branches remain
+  -> stay in WAIT_TARGET_RESPONSES
+  -> advance current_response_index
+  -> render only the next branch
+
+all surviving branches have responses
+  -> NEED_SCORES
+```
+
+Every single response is checkpointed, so `resume` continues from the next uncollected branch after interruption.
+
+Do not ask the user for any of these:
+
+```text
+{"responses": {"N-...": "..."}}
+node_id + response pairs
+numbered multi-response bundles
+all surviving branch responses in one message
+```
+
+Operator-marked comments remain feedback only and do not advance the branch cursor.
 
 ### `NEED_SCORES` / `score_branches`
 
-Score every surviving response from 1 to 10 against the original objective.
+After all surviving branches at the current depth have real responses, score every surviving response from 1 to 10 against the original objective.
+
+Internal structure:
 
 ```json
 {
@@ -229,9 +311,9 @@ Score every surviving response from 1 to 10 against the original objective.
 }
 ```
 
-The keys must exactly match the current surviving node IDs.
+The keys must exactly match the current surviving node IDs. This is Agent-to-controller structure, not user-facing input.
 
-Submit structured handoff results with:
+Submit internal structured handoff results with:
 
 ```bash
 python api.py submit-result <session_id> --data-file result.json
@@ -276,6 +358,8 @@ For restart/context loss:
 python api.py resume
 ```
 
-If node IDs do not match, never guess or reconstruct them from chat. Reload the current state and use exactly the returned IDs.
+Persisted `current_response_index` is authoritative for which branch is currently waiting for a response. Do not infer it from chat history.
+
+If node IDs do not match during internal scoring/review, never guess or reconstruct them from chat. Reload the current state and use exactly the returned IDs.
 
 For environment/install problems, use `../../INSTALL.md`.
