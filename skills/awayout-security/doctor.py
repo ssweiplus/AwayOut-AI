@@ -105,53 +105,25 @@ def main() -> int:
     ok("Algorithm intro contract", "PAIR + TAP + DrAttack must be shown")
 
     try:
-        expect_value_error(
-            "PAIR max_iterations",
-            lambda: PairController(objective="self-check", max_iterations=0),
-        )
-        expect_value_error(
-            "PAIR threshold",
-            lambda: PairController(objective="self-check", threshold=11),
-        )
-        expect_value_error(
-            "TAP branch_factor",
-            lambda: TapController(objective="self-check", branch_factor=0),
-        )
-        expect_value_error(
-            "TAP max_depth",
-            lambda: TapController(objective="self-check", max_depth=0),
-        )
-        expect_value_error(
-            "TAP width",
-            lambda: TapController(objective="self-check", width=0),
-        )
-        expect_value_error(
-            "TAP threshold",
-            lambda: TapController(objective="self-check", threshold=11),
-        )
+        expect_value_error("PAIR max_iterations", lambda: PairController(objective="self-check", max_iterations=0))
+        expect_value_error("PAIR threshold", lambda: PairController(objective="self-check", threshold=11))
+        expect_value_error("TAP branch_factor", lambda: TapController(objective="self-check", branch_factor=0))
+        expect_value_error("TAP max_depth", lambda: TapController(objective="self-check", max_depth=0))
+        expect_value_error("TAP width", lambda: TapController(objective="self-check", width=0))
+        expect_value_error("TAP threshold", lambda: TapController(objective="self-check", threshold=11))
         expect_value_error(
             "DrAttack top_k_synonyms",
             lambda: DrAttackController(objective="self-check", top_k_synonyms=0),
         )
-        expect_value_error(
-            "DrAttack threshold",
-            lambda: DrAttackController(objective="self-check", threshold=11),
-        )
-        expect_value_error(
-            "DrAttack strategies",
-            lambda: DrAttackController(objective="self-check", strategies=[]),
-        )
+        expect_value_error("DrAttack threshold", lambda: DrAttackController(objective="self-check", threshold=11))
+        expect_value_error("DrAttack strategies", lambda: DrAttackController(objective="self-check", strategies=[]))
     except Exception as exc:
         fail("Config validation", str(exc))
         return 1
     ok("Config validation", "PAIR + TAP + DrAttack")
 
     try:
-        pair = PairController(
-            objective="self-check",
-            max_iterations=2,
-            threshold=7,
-        )
+        pair = PairController(objective="self-check", max_iterations=2, threshold=7)
         if pair.stop_policy != "exhaust_budget":
             raise RuntimeError("PAIR default stop_policy is not exhaust_budget")
         pair.submit_candidate("candidate-1")
@@ -196,8 +168,18 @@ def main() -> int:
             tap.submit_offtopic_review(list(tap.current_ids))
             store.save(tap)
 
-            drattack = DrAttackController(objective="drattack-interaction-check")
+            drattack = DrAttackController(
+                objective="drattack-interaction-check",
+                strategies=["icl_structured", "word_game"],
+            )
             drattack.submit_baseline_prompt("drattack-baseline")
+            drattack.submit_baseline_response("baseline-response")
+            drattack.submit_decomposition(["part-a", "part-b"])
+            drattack.submit_synonyms([["a1"], ["b1"]], ["a1", "b1"])
+            drattack.submit_reconstructions({
+                "icl_structured": "structured-prompt",
+                "word_game": "word-game-prompt",
+            })
             store.save(drattack)
 
             pair_action = enrich(pair, store, pair.next_action())
@@ -216,23 +198,48 @@ def main() -> int:
                 if expected not in rendered:
                     raise RuntimeError(f"PAIR presentation missing: {expected}")
 
-            for name, controller in (("TAP", tap), ("DrAttack", drattack)):
-                action = enrich(controller, store, controller.next_action())
-                handoff = action.get("handoff", {})
-                required_user_output = handoff.get("required_user_output", {}) if isinstance(handoff, dict) else {}
-                if handoff.get("kind") != "human_target_interaction":
-                    raise RuntimeError(f"{name} did not reach human_target_interaction")
-                if handoff.get("must_show_to_user") is not True:
-                    raise RuntimeError(f"{name} human interaction is not marked mandatory")
-                if required_user_output.get("show_current_test_prompts") is not True:
-                    raise RuntimeError(f"{name} does not require showing current test prompts")
-                reminder = str(required_user_output.get("operator_reminder", ""))
-                if OPERATOR_MARKER not in reminder:
-                    raise RuntimeError(f"{name} operator reminder missing marker")
+            tap_action = enrich(tap, store, tap.next_action())
+            tap_handoff = tap_action.get("handoff", {})
+            tap_required = tap_handoff.get("required_user_output", {}) if isinstance(tap_handoff, dict) else {}
+            if tap_handoff.get("kind") != "human_target_interaction":
+                raise RuntimeError("TAP did not reach human_target_interaction")
+            if tap_handoff.get("must_show_to_user") is not True:
+                raise RuntimeError("TAP human interaction is not marked mandatory")
+            if tap_required.get("show_current_test_prompts") is not True:
+                raise RuntimeError("TAP does not require showing current test prompts")
+
+            dr_action = enrich(drattack, store, drattack.next_action())
+            dr_handoff = dr_action.get("handoff", {})
+            dr_presentation = dr_handoff.get("presentation", {}) if isinstance(dr_handoff, dict) else {}
+            dr_rendered = str(dr_presentation.get("rendered_text", ""))
+            if dr_handoff.get("kind") != "human_target_interaction":
+                raise RuntimeError("DrAttack did not reach human_target_interaction")
+            if dr_handoff.get("must_show_to_user") is not True:
+                raise RuntimeError("DrAttack human interaction is not marked mandatory")
+            if dr_presentation.get("input_mode") != "single_plain_text_response":
+                raise RuntimeError("DrAttack interaction is not single plain-text response mode")
+            if dr_presentation.get("strategy_index") != 1 or dr_presentation.get("strategy_total") != 2:
+                raise RuntimeError("DrAttack first strategy progress is incorrect")
+            for expected in ("DrAttack 策略测试 1/2", "structured-prompt", "不需要填写 JSON", OPERATOR_MARKER):
+                if expected not in dr_rendered:
+                    raise RuntimeError(f"DrAttack presentation missing: {expected}")
+
+            first_dr = drattack.submit_strategy_response("structured-response")
+            if first_dr["state"] != "WAIT_STRATEGY_RESPONSES":
+                raise RuntimeError("DrAttack did not remain in WAIT_STRATEGY_RESPONSES after first response")
+            if first_dr["current_strategy"]["strategy"] != "word_game":
+                raise RuntimeError("DrAttack did not advance to the second strategy")
+            store.save(drattack)
+            restored = store.load(drattack.session_id)
+            if restored.current_strategy_index != 1:
+                raise RuntimeError("DrAttack strategy index was not persisted")
+            second_dr = restored.submit_strategy_response("word-game-response")
+            if second_dr["state"] != "NEED_STRATEGY_SCORES":
+                raise RuntimeError("DrAttack did not advance to scoring after all strategy responses")
     except Exception as exc:
         fail("Human interaction contract", str(exc))
         return 1
-    ok("Human interaction contract", "PAIR formatted template + TAP/DrAttack mandatory interaction")
+    ok("Human interaction contract", "PAIR formatted + TAP mandatory + DrAttack sequential plain-text")
 
     try:
         with tempfile.TemporaryDirectory() as directory:
