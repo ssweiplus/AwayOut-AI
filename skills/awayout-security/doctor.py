@@ -163,8 +163,11 @@ def main() -> int:
             pair.submit_candidate("pair-candidate")
             store.save(pair)
 
-            tap = TapController(objective="tap-interaction-check")
-            tap.submit_branches([{"prompt": "tap-candidate"}])
+            tap = TapController(objective="tap-interaction-check", branch_factor=2)
+            tap.submit_branches([
+                {"prompt": "tap-candidate-1", "improvement": "direction-1"},
+                {"prompt": "tap-candidate-2", "improvement": "direction-2"},
+            ])
             tap.submit_offtopic_review(list(tap.current_ids))
             store.save(tap)
 
@@ -200,13 +203,32 @@ def main() -> int:
 
             tap_action = enrich(tap, store, tap.next_action())
             tap_handoff = tap_action.get("handoff", {})
-            tap_required = tap_handoff.get("required_user_output", {}) if isinstance(tap_handoff, dict) else {}
+            tap_presentation = tap_handoff.get("presentation", {}) if isinstance(tap_handoff, dict) else {}
+            tap_rendered = str(tap_presentation.get("rendered_text", ""))
             if tap_handoff.get("kind") != "human_target_interaction":
                 raise RuntimeError("TAP did not reach human_target_interaction")
             if tap_handoff.get("must_show_to_user") is not True:
                 raise RuntimeError("TAP human interaction is not marked mandatory")
-            if tap_required.get("show_current_test_prompts") is not True:
-                raise RuntimeError("TAP does not require showing current test prompts")
+            if tap_presentation.get("input_mode") != "single_plain_text_response":
+                raise RuntimeError("TAP interaction is not single plain-text response mode")
+            if tap_presentation.get("branch_index") != 1 or tap_presentation.get("branch_total") != 2:
+                raise RuntimeError("TAP first branch progress is incorrect")
+            for expected in ("TAP 深度 1/5", "分支测试 1/2", "tap-candidate-1", "不需要填写 JSON", OPERATOR_MARKER):
+                if expected not in tap_rendered:
+                    raise RuntimeError(f"TAP presentation missing: {expected}")
+
+            first_tap = tap.submit_response("tap-response-1")
+            if first_tap["state"] != "WAIT_TARGET_RESPONSES":
+                raise RuntimeError("TAP did not remain in WAIT_TARGET_RESPONSES after first response")
+            if first_tap["current_branch"]["prompt"] != "tap-candidate-2":
+                raise RuntimeError("TAP did not advance to the second branch")
+            store.save(tap)
+            restored_tap = store.load(tap.session_id)
+            if restored_tap.current_response_index != 1:
+                raise RuntimeError("TAP response cursor was not persisted")
+            second_tap = restored_tap.submit_response("tap-response-2")
+            if second_tap["state"] != "NEED_SCORES":
+                raise RuntimeError("TAP did not advance to scoring after all branch responses")
 
             dr_action = enrich(drattack, store, drattack.next_action())
             dr_handoff = dr_action.get("handoff", {})
@@ -239,7 +261,7 @@ def main() -> int:
     except Exception as exc:
         fail("Human interaction contract", str(exc))
         return 1
-    ok("Human interaction contract", "PAIR formatted + TAP mandatory + DrAttack sequential plain-text")
+    ok("Human interaction contract", "PAIR formatted + TAP sequential plain-text + DrAttack sequential plain-text")
 
     try:
         with tempfile.TemporaryDirectory() as directory:
