@@ -12,7 +12,11 @@ if str(SKILL_ROOT) not in sys.path:
 from algorithms.drattack.controller import DrAttackController
 from algorithms.pair.controller import PairController
 from algorithms.tap.controller import TapController
-from common.presenter import OPERATOR_MARKER, render_pair_target_interaction
+from common.presenter import (
+    OPERATOR_MARKER,
+    render_drattack_strategy_interaction,
+    render_pair_target_interaction,
+)
 from common.store import AgentSessionStore
 
 OPERATOR_REMINDER = f"人工意见（可选）：如需发表测试意见，请以 {OPERATOR_MARKER} 开头。"
@@ -124,13 +128,19 @@ def checkpoint(controller, action: dict) -> dict:
             "NEED_DECOMPOSITION": "decompose the original objective",
             "NEED_SYNONYMS": "generate semantic alternatives",
             "NEED_RECONSTRUCTIONS": "reconstruct strategy prompts",
-            "WAIT_STRATEGY_RESPONSES": "collect strategy responses",
+            "WAIT_STRATEGY_RESPONSES": "collect one strategy response",
             "NEED_STRATEGY_SCORES": "score strategy responses",
             "DONE": "finished",
         }
+        current = f"DrAttack: {labels.get(state, state)}."
+        if state == "WAIT_STRATEGY_RESPONSES":
+            progress = action.get("progress", {})
+            completed = int(progress.get("strategy_responses_completed", 0))
+            total = int(progress.get("strategy_responses_total", 0))
+            current = f"DrAttack strategy responses: {completed}/{total} completed; waiting for the next single response."
         return {
             "step": action_name,
-            "display": f"DrAttack: {labels.get(state, state)}.",
+            "display": current,
             "next": action.get("handoff", {}).get("instruction", "Follow the returned action."),
         }
 
@@ -177,6 +187,25 @@ def enrich(controller, store: AgentSessionStore, result: dict) -> dict:
                 "The user should copy only the Prompt code block."
             ).strip()
             payload["presentation"] = presentation
+
+        elif isinstance(controller, DrAttackController) and controller.state == "WAIT_STRATEGY_RESPONSES":
+            presentation = render_drattack_strategy_interaction(payload, latest_feedback)
+            handoff["presentation"] = presentation
+            handoff["required_user_output"] = {
+                "rendered_text": presentation["rendered_text"],
+                "input_mode": "single_plain_text_response",
+                "display_rule": (
+                    "Display rendered_text exactly once and verbatim. Wait for one plain-text target response only. "
+                    "Do not ask the user for JSON and do not display other strategy prompts yet."
+                ),
+            }
+            handoff["instruction"] = (
+                f"{str(handoff.get('instruction', '')).strip()} "
+                "MUST display handoff.presentation.rendered_text verbatim. Accept exactly one unmarked user message "
+                "as the current strategy response, submit it, then show the next returned strategy presentation."
+            ).strip()
+            payload["presentation"] = presentation
+
         else:
             required_user_output = {
                 "show_current_test_prompts": True,
@@ -269,6 +298,18 @@ def cmd_response(args: argparse.Namespace, store: AgentSessionStore) -> int:
     return emit_state(controller, store)
 
 
+def cmd_drattack_response(args: argparse.Namespace, store: AgentSessionStore) -> int:
+    controller = store.load(args.session_id)
+    if not isinstance(controller, DrAttackController):
+        raise ValueError("submit-drattack-response is DrAttack-only")
+    if controller.state != "WAIT_STRATEGY_RESPONSES":
+        raise ValueError("DrAttack is not waiting for a strategy response")
+    response = read_text(args.response, args.response_file, "response")
+    controller.submit_strategy_response(response)
+    store.save(controller)
+    return emit_state(controller, store)
+
+
 def cmd_judgement(args: argparse.Namespace, store: AgentSessionStore) -> int:
     controller = store.load(args.session_id)
     if not isinstance(controller, PairController):
@@ -318,7 +359,7 @@ def cmd_result(args: argparse.Namespace, store: AgentSessionStore) -> int:
         elif state == "NEED_RECONSTRUCTIONS":
             controller.submit_reconstructions(dict(data.get("prompts", {})))
         elif state == "WAIT_STRATEGY_RESPONSES":
-            controller.submit_strategy_responses(dict(data.get("responses", {})))
+            controller.submit_strategy_response(str(data.get("response", "")))
         elif state == "NEED_STRATEGY_SCORES":
             controller.submit_strategy_scores(dict(data.get("scores", {})))
         else:
@@ -406,6 +447,11 @@ def build_parser() -> argparse.ArgumentParser:
     response.add_argument("--response")
     response.add_argument("--response-file")
 
+    dr_response = sub.add_parser("submit-drattack-response")
+    dr_response.add_argument("session_id")
+    dr_response.add_argument("--response")
+    dr_response.add_argument("--response-file")
+
     judgement = sub.add_parser("submit-judgement")
     judgement.add_argument("session_id")
     judgement.add_argument("--score", type=int, required=True)
@@ -441,6 +487,7 @@ def main() -> int:
         "start-test": cmd_start,
         "submit-candidate": cmd_candidate,
         "submit-response": cmd_response,
+        "submit-drattack-response": cmd_drattack_response,
         "submit-judgement": cmd_judgement,
         "submit-result": cmd_result,
         "add-feedback": cmd_feedback,
