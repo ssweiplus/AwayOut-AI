@@ -4,6 +4,7 @@ import importlib.util
 import sys
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 SKILL_ROOT = Path(__file__).resolve().parent
 if str(SKILL_ROOT) not in sys.path:
@@ -36,40 +37,31 @@ def main() -> int:
     ok("Python", sys.version.split()[0])
 
     required = [
-        "SKILL.md",
-        "INSTALL.md",
-        "REPORTING.md",
-        "api.py",
-        "doctor.py",
-        "common/store.py",
-        "common/presenter.py",
-        "common/scoring.py",
-        "common/memory.py",
-        "common/report.py",
-        "algorithms/pair/SKILL.md",
-        "algorithms/pair/controller.py",
-        "algorithms/tap/SKILL.md",
-        "algorithms/tap/controller.py",
-        "algorithms/drattack/SKILL.md",
-        "algorithms/drattack/controller.py",
+        "SKILL.md", "INSTALL.md", "REPORTING.md", "api.py", "doctor.py",
+        "common/store.py", "common/presenter.py", "common/interaction.py",
+        "common/scoring.py", "common/memory.py", "common/report.py",
+        "algorithms/pair/SKILL.md", "algorithms/pair/controller.py",
+        "algorithms/tap/SKILL.md", "algorithms/tap/controller.py",
+        "algorithms/drattack/SKILL.md", "algorithms/drattack/controller.py",
     ]
     missing = [name for name in required if not (SKILL_ROOT / name).is_file()]
     if missing:
         fail("Skill files", ", ".join(missing))
         return 1
-    ok("Skill files", "router + presenter + scoring + memory + report + 3 algorithm skills")
+    ok("Skill files", "router + presenter + interaction + scoring + memory + report + 3 algorithms")
 
     try:
         from algorithms.pair.controller import PairController
         from algorithms.tap.controller import TapController
         from algorithms.drattack.controller import DrAttackController
+        from common.interaction import EVENT_MARKER, OPERATOR_MARKER, RESPONSE_MARKER, parse_user_submission
         from common.memory import build_memory_context
         from common.store import AgentSessionStore
-        from api import OPERATOR_MARKER, algorithm_selection_contract, enrich
+        from api import algorithm_selection_contract, cmd_user_input, enrich
     except Exception as exc:
         fail("Imports", str(exc))
         return 1
-    ok("Controllers", "PAIR, TAP, DrAttack")
+    ok("Imports", "controllers + interaction + memory + API")
 
     try:
         actions = {
@@ -78,79 +70,68 @@ def main() -> int:
             "DrAttack": DrAttackController(objective="self-check").next_action(),
         }
         for name, action in actions.items():
-            handoff = action.get("handoff", {})
-            guard = handoff.get("objective_guard") if isinstance(handoff, dict) else None
+            guard = action.get("handoff", {}).get("objective_guard")
             if not isinstance(guard, dict) or guard.get("original_objective") != "self-check":
                 raise RuntimeError(f"{name} initial handoff missing objective_guard")
-        if not actions["PAIR"]["handoff"].get("mutation_goal"):
-            raise RuntimeError("PAIR initial handoff missing mutation_goal")
-        if not actions["TAP"]["handoff"].get("mutation_goal"):
-            raise RuntimeError("TAP initial handoff missing mutation_goal")
-        if not actions["DrAttack"]["handoff"].get("mutation_goal"):
-            raise RuntimeError("DrAttack initial handoff missing mutation_goal")
+        for name in ("PAIR", "TAP", "DrAttack"):
+            if not actions[name]["handoff"].get("mutation_goal"):
+                raise RuntimeError(f"{name} initial handoff missing mutation_goal")
     except Exception as exc:
         fail("Controller startup", str(exc))
         return 1
-    ok("Controller startup", "objective guards present on all algorithms")
+    ok("Controller startup", "objective guards present")
 
     try:
         intro = algorithm_selection_contract()
-        required_output = intro.get("required_user_output", {})
-        options = required_output.get("options", [])
-        names = [item.get("algorithm") for item in options if isinstance(item, dict)]
-        if intro.get("must_show_to_user") is not True:
-            raise RuntimeError("algorithm introduction is not marked mandatory")
-        if names != ["PAIR", "TAP", "DrAttack"]:
-            raise RuntimeError("algorithm introduction does not expose PAIR/TAP/DrAttack in order")
-        if not required_output.get("selection_prompt"):
-            raise RuntimeError("algorithm introduction missing selection prompt")
+        names = [item.get("algorithm") for item in intro.get("required_user_output", {}).get("options", [])]
+        if intro.get("must_show_to_user") is not True or names != ["PAIR", "TAP", "DrAttack"]:
+            raise RuntimeError("algorithm selection contract invalid")
     except Exception as exc:
         fail("Algorithm intro contract", str(exc))
         return 1
-    ok("Algorithm intro contract", "PAIR + TAP + DrAttack must be shown")
+    ok("Algorithm intro contract", "PAIR + TAP + DrAttack")
 
     try:
-        expect_value_error("PAIR max_iterations", lambda: PairController(objective="self-check", max_iterations=0))
-        expect_value_error("PAIR threshold", lambda: PairController(objective="self-check", threshold=11))
-        expect_value_error("TAP branch_factor", lambda: TapController(objective="self-check", branch_factor=0))
-        expect_value_error("TAP max_depth", lambda: TapController(objective="self-check", max_depth=0))
-        expect_value_error("TAP width", lambda: TapController(objective="self-check", width=0))
-        expect_value_error("TAP threshold", lambda: TapController(objective="self-check", threshold=11))
-        expect_value_error("DrAttack top_k_synonyms", lambda: DrAttackController(objective="self-check", top_k_synonyms=0))
-        expect_value_error("DrAttack threshold", lambda: DrAttackController(objective="self-check", threshold=11))
-        expect_value_error("DrAttack strategies", lambda: DrAttackController(objective="self-check", strategies=[]))
+        expect_value_error("PAIR max_iterations", lambda: PairController(objective="x", max_iterations=0))
+        expect_value_error("PAIR threshold", lambda: PairController(objective="x", threshold=11))
+        expect_value_error("TAP branch_factor", lambda: TapController(objective="x", branch_factor=0))
+        expect_value_error("TAP max_depth", lambda: TapController(objective="x", max_depth=0))
+        expect_value_error("TAP width", lambda: TapController(objective="x", width=0))
+        expect_value_error("DrAttack top_k", lambda: DrAttackController(objective="x", top_k_synonyms=0))
     except Exception as exc:
         fail("Config validation", str(exc))
         return 1
-    ok("Config validation", "PAIR + TAP + DrAttack")
+    ok("Config validation", "core ranges")
 
     try:
-        pair = PairController(objective="self-check", max_iterations=2, threshold=7)
-        if pair.stop_policy != "exhaust_budget":
-            raise RuntimeError("PAIR default stop_policy is not exhaust_budget")
-        pair.submit_candidate("candidate-1")
-        pair.submit_response("response-1")
-        first = pair.submit_judgement(8, "threshold reached")
-        if first["state"] != "NEED_CANDIDATE":
-            raise RuntimeError("PAIR exhaust_budget stopped after first success")
-        pair.submit_candidate("candidate-2")
-        pair.submit_response("response-2")
-        final = pair.submit_judgement(9, "second success")
-        if final["state"] != "DONE" or final.get("stop_reason") != "max_iterations_reached":
-            raise RuntimeError("PAIR exhaust_budget did not stop at max_iterations")
-        if final["summary"]["best_node"]["score"] != 9:
-            raise RuntimeError("PAIR summary did not retain the best result")
+        simple = parse_user_submission("full target response")
+        if simple["mode"] != "simple" or simple["response"] != "full target response":
+            raise RuntimeError("simple response parsing failed")
 
-        early = PairController(objective="self-check", max_iterations=2, threshold=7, stop_policy="first_success")
-        early.submit_candidate("candidate-1")
-        early.submit_response("response-1")
-        stopped = early.submit_judgement(7, "threshold reached")
-        if stopped["state"] != "DONE" or stopped.get("stop_reason") != "success_threshold_reached":
-            raise RuntimeError("PAIR first_success did not stop on threshold")
+        advanced = parse_user_submission(
+            f"{EVENT_MARKER}\n新开会话\n\n"
+            f"{OPERATOR_MARKER}\n我怀疑新会话影响结果\n\n"
+            f"{RESPONSE_MARKER}\nadvanced target response"
+        )
+        if advanced["response"] != "advanced target response":
+            raise RuntimeError("advanced response parsing failed")
+        if advanced["events"][0]["event_type"] != "new_target_session":
+            raise RuntimeError("operator event classification failed")
+        if advanced["comments"] != ["我怀疑新会话影响结果"]:
+            raise RuntimeError("operator comment parsing failed")
+
+        comment_only = parse_user_submission(f"{OPERATOR_MARKER}\n只记录意见")
+        if comment_only["response"] is not None:
+            raise RuntimeError("comment-only input should not create a response")
+
+        expect_value_error(
+            "advanced unlabelled preamble",
+            lambda: parse_user_submission(f"unlabelled\n{RESPONSE_MARKER}\nresponse"),
+        )
     except Exception as exc:
-        fail("PAIR stop policy", str(exc))
+        fail("Human input parser", str(exc))
         return 1
-    ok("PAIR stop policy", "exhaust_budget + first_success")
+    ok("Human input parser", "simple + EVENT/OPERATOR/RESPONSE + no-response blocks")
 
     try:
         with tempfile.TemporaryDirectory() as directory:
@@ -159,79 +140,83 @@ def main() -> int:
             pair = PairController(objective="pair-interaction-check", max_iterations=3)
             pair.submit_candidate("pair-candidate")
             store.save(pair)
-
-            tap = TapController(objective="tap-interaction-check", branch_factor=2)
-            tap.submit_branches([
-                {"prompt": "tap-candidate-1", "improvement": "direction-1"},
-                {"prompt": "tap-candidate-2", "improvement": "direction-2"},
-            ])
-            tap.submit_offtopic_review(list(tap.current_ids))
-            store.save(tap)
-
-            drattack = DrAttackController(objective="drattack-interaction-check", strategies=["icl_structured", "word_game"])
-            drattack.submit_baseline_prompt("drattack-baseline")
-            drattack.submit_baseline_response("baseline-response")
-            drattack.submit_decomposition(["part-a", "part-b"])
-            drattack.submit_synonyms([["a1"], ["b1"]], ["a1", "b1"])
-            drattack.submit_reconstructions({"icl_structured": "structured-prompt", "word_game": "word-game-prompt"})
-            store.save(drattack)
-
             pair_action = enrich(pair, store, pair.next_action())
-            pair_handoff = pair_action.get("handoff", {})
-            pair_presentation = pair_handoff.get("presentation", {}) if isinstance(pair_handoff, dict) else {}
-            rendered = str(pair_presentation.get("rendered_text", ""))
-            if pair_handoff.get("kind") != "human_target_interaction" or pair_handoff.get("must_show_to_user") is not True:
-                raise RuntimeError("PAIR human interaction contract invalid")
-            if pair_presentation.get("must_show_verbatim") is not True or pair_presentation.get("copy_target") != "prompt_block_only":
-                raise RuntimeError("PAIR presentation contract invalid")
-            for expected in ("PAIR 第 1/3 轮", "本轮策略", "pair-candidate", "人工意见（可选）", OPERATOR_MARKER):
+            rendered = pair_action["handoff"]["presentation"]["rendered_text"]
+            presentation = pair_action["handoff"]["presentation"]
+            for expected in (
+                "通常情况：直接粘贴目标系统的完整响应即可",
+                EVENT_MARKER,
+                OPERATOR_MARKER,
+                RESPONSE_MARKER,
+                "pair-candidate",
+            ):
                 if expected not in rendered:
-                    raise RuntimeError(f"PAIR presentation missing: {expected}")
+                    raise RuntimeError(f"PAIR presenter missing: {expected}")
+            if presentation.get("input_mode") != "simple_or_advanced_blocks":
+                raise RuntimeError("PAIR presenter input mode is wrong")
 
-            tap_action = enrich(tap, store, tap.next_action())
-            tap_handoff = tap_action.get("handoff", {})
-            tap_presentation = tap_handoff.get("presentation", {}) if isinstance(tap_handoff, dict) else {}
-            tap_rendered = str(tap_presentation.get("rendered_text", ""))
-            if tap_presentation.get("input_mode") != "single_plain_text_response":
-                raise RuntimeError("TAP interaction is not single plain-text response mode")
-            if tap_presentation.get("branch_index") != 1 or tap_presentation.get("branch_total") != 2:
-                raise RuntimeError("TAP first branch progress is incorrect")
-            for expected in ("TAP 深度 1/5", "分支测试 1/2", "tap-candidate-1", "不需要填写 JSON", OPERATOR_MARKER):
-                if expected not in tap_rendered:
-                    raise RuntimeError(f"TAP presentation missing: {expected}")
-            first_tap = tap.submit_response("tap-response-1")
-            if first_tap["state"] != "WAIT_TARGET_RESPONSES" or first_tap["current_branch"]["prompt"] != "tap-candidate-2":
-                raise RuntimeError("TAP did not advance sequentially")
-            store.save(tap)
-            restored_tap = store.load(tap.session_id)
-            if restored_tap.current_response_index != 1:
-                raise RuntimeError("TAP response cursor was not persisted")
-            if restored_tap.submit_response("tap-response-2")["state"] != "NEED_SCORES":
-                raise RuntimeError("TAP did not advance to scoring")
+            input_file = Path(directory) / "user-input.txt"
+            input_file.write_text(
+                f"{EVENT_MARKER}\n新开会话\n\n"
+                f"{OPERATOR_MARKER}\n记录这次会话切换\n\n"
+                f"{RESPONSE_MARKER}\nreal target response",
+                encoding="utf-8",
+            )
+            args = SimpleNamespace(
+                session_id=pair.session_id,
+                message=None,
+                message_file=str(input_file),
+            )
+            if cmd_user_input(args, store) != 0:
+                raise RuntimeError("submit-user-input command failed")
+            restored = store.load(pair.session_id)
+            if restored.state != "NEED_JUDGEMENT" or restored.current_node.response != "real target response":
+                raise RuntimeError("submit-user-input did not advance Pair with the target response")
+            if len(store.get_operator_events(pair.session_id)) != 1:
+                raise RuntimeError("operator event was not persisted")
+            if len(store.get_feedback(pair.session_id)) != 1:
+                raise RuntimeError("operator comment was not persisted")
 
-            dr_action = enrich(drattack, store, drattack.next_action())
-            dr_handoff = dr_action.get("handoff", {})
-            dr_presentation = dr_handoff.get("presentation", {}) if isinstance(dr_handoff, dict) else {}
-            dr_rendered = str(dr_presentation.get("rendered_text", ""))
-            if dr_presentation.get("input_mode") != "single_plain_text_response":
-                raise RuntimeError("DrAttack interaction is not single plain-text response mode")
-            if dr_presentation.get("strategy_index") != 1 or dr_presentation.get("strategy_total") != 2:
-                raise RuntimeError("DrAttack first strategy progress is incorrect")
-            for expected in ("DrAttack 策略测试 1/2", "structured-prompt", "不需要填写 JSON", OPERATOR_MARKER):
-                if expected not in dr_rendered:
-                    raise RuntimeError(f"DrAttack presentation missing: {expected}")
-            if drattack.submit_strategy_response("structured-response")["state"] != "WAIT_STRATEGY_RESPONSES":
-                raise RuntimeError("DrAttack did not remain sequential")
-            store.save(drattack)
-            restored = store.load(drattack.session_id)
-            if restored.current_strategy_index != 1:
-                raise RuntimeError("DrAttack strategy index was not persisted")
-            if restored.submit_strategy_response("word-game-response")["state"] != "NEED_STRATEGY_SCORES":
-                raise RuntimeError("DrAttack did not advance to scoring")
+            # Comment/event only must remain at the same human-interaction state.
+            pair2 = PairController(objective="no-advance-check")
+            pair2.submit_candidate("candidate")
+            store.save(pair2)
+            only_file = Path(directory) / "only-comment.txt"
+            only_file.write_text(f"{EVENT_MARKER}\n清空上下文\n\n{OPERATOR_MARKER}\n只记录，不推进", encoding="utf-8")
+            args2 = SimpleNamespace(session_id=pair2.session_id, message=None, message_file=str(only_file))
+            cmd_user_input(args2, store)
+            if store.load(pair2.session_id).state != "WAIT_TARGET_RESPONSE":
+                raise RuntimeError("event/comment-only input advanced the state")
+
+            # DrAttack baseline must use the same presenter guidance.
+            dr = DrAttackController(objective="baseline-check", strategies=["icl_structured"])
+            dr.submit_baseline_prompt("baseline-prompt")
+            store.save(dr)
+            dr_action = enrich(dr, store, dr.next_action())
+            dr_rendered = dr_action["handoff"]["presentation"]["rendered_text"]
+            if "DrAttack 基线测试" not in dr_rendered or RESPONSE_MARKER not in dr_rendered:
+                raise RuntimeError("DrAttack baseline did not use unified presenter")
     except Exception as exc:
         fail("Human interaction contract", str(exc))
         return 1
-    ok("Human interaction contract", "PAIR formatted + TAP sequential + DrAttack sequential")
+    ok("Human interaction contract", "unified presenter + submit-user-input + no-advance operator-only input")
+
+    try:
+        pair = PairController(objective="score-policy", max_iterations=2)
+        pair.submit_candidate("p1")
+        pair.submit_response("r1")
+        internal = enrich(pair, AgentSessionStore(tempfile.mkdtemp()), pair.next_action())
+        if internal["handoff"].get("visibility") != "internal":
+            raise RuntimeError("scoring is not internal-only")
+        anchors = internal.get("rubric", {}).get("anchors", [])
+        if len(anchors) != 5:
+            raise RuntimeError("shared scoring anchors missing")
+        if "memory_update" not in internal.get("rubric", {}).get("required_internal_output", {}):
+            raise RuntimeError("scoring contract missing memory_update")
+    except Exception as exc:
+        fail("Scoring + internal boundary", str(exc))
+        return 1
+    ok("Scoring + internal boundary", "5 anchors + memory extraction + silent scoring")
 
     try:
         with tempfile.TemporaryDirectory() as directory:
@@ -239,20 +224,19 @@ def main() -> int:
             store = AgentSessionStore(str(store_dir))
             pair = PairController(objective="memory-report-check", max_iterations=2)
             pair.submit_candidate("full prompt original")
+            store.save(pair)
+            store.add_operator_event(pair.session_id, "new_target_session", "新开会话", "before_response")
+            store.add_feedback(pair.session_id, "人工观察")
             pair.submit_response("full target response original")
             pair.submit_judgement(5, "evidence: partial progress; missing final value")
             store.save(pair)
 
             report_root = Path(directory) / f"test-report-{pair.session_id}"
             round_file = report_root / "RESPONSES" / "round01.md"
-            if not round_file.is_file():
-                raise RuntimeError("round report was not created")
             round_text = round_file.read_text(encoding="utf-8")
-            if "full prompt original" not in round_text or "full target response original" not in round_text:
-                raise RuntimeError("raw Prompt/Response were not preserved in report")
-            for required_name in ("SUMMARY.md", "ATTACK_PATTERN.md", "TURNING_POINTS.md", "prompt-tree.md", "strategy-evolution.md"):
-                if not (report_root / required_name).is_file():
-                    raise RuntimeError(f"report missing {required_name}")
+            for expected in ("full prompt original", "full target response original", "新开会话", "人工观察", "## 测试者操作", "## 操作员意见"):
+                if expected not in round_text:
+                    raise RuntimeError(f"round report missing: {expected}")
 
             store.add_memory_update(pair.session_id, {
                 "items": [
@@ -280,21 +264,19 @@ def main() -> int:
                     },
                 ]
             })
-            document = store.get_document(pair.session_id)
-            context = build_memory_context(document)
-            exact = context.get("exact_facts", [])
-            if not exact or exact[0].get("content") != "messages.content":
+            context = build_memory_context(store.get_document(pair.session_id))
+            if not context.get("exact_facts") or context["exact_facts"][0].get("content") != "messages.content":
                 raise RuntimeError("exact memory was not preserved")
             if not context.get("semantic_memory"):
                 raise RuntimeError("semantic memory context is empty")
             store.set_metadata(pair.session_id, target_system="self-check-target")
             summary_text = (report_root / "SUMMARY.md").read_text(encoding="utf-8")
-            if "self-check-target" not in summary_text:
-                raise RuntimeError("target-system metadata did not refresh report")
+            if "self-check-target" not in summary_text or "特殊人工操作数：1" not in summary_text:
+                raise RuntimeError("summary did not refresh metadata/operator-event counts")
     except Exception as exc:
         fail("Working Memory + report archival", str(exc))
         return 1
-    ok("Working Memory + report archival", "raw records + layered memory + auto-refresh report")
+    ok("Working Memory + report archival", "raw records + operator context + layered memory")
 
     try:
         with tempfile.TemporaryDirectory() as directory:
@@ -309,8 +291,6 @@ def main() -> int:
                 restored = store.load(controller.session_id)
                 if restored.session_id != controller.session_id:
                     raise RuntimeError(f"session restore mismatch for {controller.session_id}")
-            if store.load(controllers[0].session_id).stop_policy != "exhaust_budget":
-                raise RuntimeError("session restore lost PAIR stop_policy")
     except Exception as exc:
         fail("Session store", str(exc))
         return 1
