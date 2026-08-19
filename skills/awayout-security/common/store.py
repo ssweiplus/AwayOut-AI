@@ -52,41 +52,45 @@ class AgentSessionStore:
     def _now(self) -> str:
         return datetime.now(timezone.utc).isoformat()
 
+    def _current_source_ref(self, data: dict[str, Any]) -> str | None:
+        algorithm = str(data.get("algorithm", "")).upper()
+        state = str(data.get("state", ""))
+        if algorithm == "PAIR":
+            node_id = data.get("current_node_id")
+            return str(node_id) if node_id else None
+        if algorithm == "TAP" and state == "WAIT_TARGET_RESPONSES":
+            current_ids = list(data.get("current_ids", []))
+            index = int(data.get("current_response_index", 0))
+            if 0 <= index < len(current_ids):
+                return str(current_ids[index])
+        if algorithm in {"DRATTACK", "DR_ATTACK"} and state == "WAIT_STRATEGY_RESPONSES":
+            nodes = [n for n in data.get("strategy_nodes", []) if isinstance(n, dict)]
+            index = int(data.get("current_strategy_index", 0))
+            if 0 <= index < len(nodes):
+                return str(nodes[index].get("strategy") or "") or None
+        return None
+
     def _write_active(self, data: dict[str, Any], runtime: dict[str, Any]) -> None:
-        self.active_path.write_text(
-            json.dumps(
-                {
-                    "session_id": data.get("session_id"),
-                    "algorithm": data.get("algorithm"),
-                    "objective": data.get("objective"),
-                    "state": data.get("state"),
-                    "updated_at": runtime.get("updated_at"),
-                },
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
+        self.active_path.write_text(json.dumps({
+            "session_id": data.get("session_id"),
+            "algorithm": data.get("algorithm"),
+            "objective": data.get("objective"),
+            "state": data.get("state"),
+            "updated_at": runtime.get("updated_at"),
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _archive(self, data: dict[str, Any]) -> Path:
         return sync_report(data, self.report_root)
 
     def save(self, controller: Controller) -> Path:
         path = self._path(controller.session_id)
-        runtime: dict[str, Any] = {}
         if path.is_file():
             try:
                 runtime = self._runtime(json.loads(path.read_text(encoding="utf-8")))
             except Exception:
-                runtime = {
-                    "feedback": [],
-                    "metadata": {},
-                    "working_memory": empty_working_memory(),
-                    "created_at": self._now(),
-                }
+                runtime = {"feedback": [], "metadata": {}, "working_memory": empty_working_memory(), "created_at": self._now()}
         else:
             runtime = self._runtime({})
-
         runtime["updated_at"] = self._now()
         data = controller.to_dict()
         data["_runtime"] = runtime
@@ -129,18 +133,16 @@ class AgentSessionStore:
                     continue
                 runtime = self._runtime(data)
                 memory = runtime.get("working_memory") if isinstance(runtime.get("working_memory"), dict) else {}
-                sessions.append(
-                    {
-                        "session_id": data.get("session_id"),
-                        "algorithm": data.get("algorithm"),
-                        "objective": data.get("objective"),
-                        "state": data.get("state"),
-                        "updated_at": runtime.get("updated_at"),
-                        "feedback_count": len(runtime.get("feedback", [])),
-                        "memory_item_count": len(memory.get("items", [])),
-                        "report_dir": str(self.report_root / f"test-report-{data.get('session_id')}") if data.get("session_id") else None,
-                    }
-                )
+                sessions.append({
+                    "session_id": data.get("session_id"),
+                    "algorithm": data.get("algorithm"),
+                    "objective": data.get("objective"),
+                    "state": data.get("state"),
+                    "updated_at": runtime.get("updated_at"),
+                    "feedback_count": len(runtime.get("feedback", [])),
+                    "memory_item_count": len(memory.get("items", [])),
+                    "report_dir": str(self.report_root / f"test-report-{data.get('session_id')}") if data.get("session_id") else None,
+                })
             except Exception:
                 continue
         sessions.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
@@ -150,17 +152,16 @@ class AgentSessionStore:
         value = text.strip()
         if not value:
             raise ValueError("feedback cannot be empty")
-
         path = self._path(session_id)
         data = self._read_document(session_id)
         runtime = self._runtime(data)
-        feedback = runtime.setdefault("feedback", [])
         item = {
             "text": value,
             "created_at": self._now(),
             "state": data.get("state"),
+            "source_ref": self._current_source_ref(data),
         }
-        feedback.append(item)
+        runtime.setdefault("feedback", []).append(item)
         runtime["updated_at"] = item["created_at"]
         data["_runtime"] = runtime
         path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -170,8 +171,7 @@ class AgentSessionStore:
 
     def get_feedback(self, session_id: str) -> list[dict[str, Any]]:
         data = self._read_document(session_id)
-        runtime = self._runtime(data)
-        return list(runtime.get("feedback", []))
+        return list(self._runtime(data).get("feedback", []))
 
     def add_memory_update(self, session_id: str, update: dict[str, Any]) -> dict[str, Any]:
         path = self._path(session_id)
