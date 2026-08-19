@@ -22,12 +22,15 @@ Required layout:
 awayout-security/
 ├── SKILL.md
 ├── INSTALL.md
+├── REPORTING.md
 ├── api.py
 ├── doctor.py
 ├── common/
 │   ├── store.py
 │   ├── presenter.py
-│   └── scoring.py
+│   ├── scoring.py
+│   ├── memory.py
+│   └── report.py
 └── algorithms/
     ├── pair/
     │   ├── SKILL.md
@@ -40,7 +43,7 @@ awayout-security/
         └── controller.py
 ```
 
-Do not copy only `SKILL.md`; the controllers, API, presenter, scoring helper and store are part of the skill runtime.
+Do not copy only `SKILL.md`; controllers, API, presenter, scoring, Working Memory, report archiver and store are part of the runtime.
 
 Do not mix files from different revisions.
 
@@ -58,18 +61,7 @@ Expected final line:
 Agent Mode is ready. No external LLM provider is required.
 ```
 
-The doctor checks:
-
-```text
-- Python version
-- required Agent Mode files
-- PAIR/TAP/DrAttack imports
-- controller startup
-- internal-only/user-facing presentation boundaries
-- anchored scoring contract
-- sequential PAIR/TAP/DrAttack user interactions
-- session read/write persistence
-```
+The doctor checks Python/version, required files, controller startup, user-facing interaction contracts, internal-only boundaries, scoring anchors, Working Memory compatibility/persistence, report creation and session restore.
 
 ## First run / recovery
 
@@ -89,27 +81,57 @@ Otherwise follow `SKILL.md` to collect the objective and choose an algorithm.
 
 ## Runtime data
 
-AwayOut creates session data under:
+Execution state:
 
 ```text
 .awayout-agent/
 ```
 
-This directory is runtime state, not an installation dependency. Keep it if you want to resume existing tests; it may be removed if you intentionally want to discard local session state.
+Permanent test archive (sibling of the store directory when using the default store):
+
+```text
+test-report-S-xxxxxxxxxx/
+```
+
+The report directory is refreshed on session saves and runtime metadata/memory updates. Keep it for review/audit even if the session later ends or is discarded.
+
+Working Memory is stored inside each session document under:
+
+```text
+_runtime.working_memory
+```
+
+It is auxiliary context only. Full raw Prompt/Response history remains in the controller/session and `test-report-*/RESPONSES/`.
+
+## Working Memory commands
+
+Inspect mutation context:
+
+```bash
+python -m common.memory context <session_id>
+```
+
+Persist a scoring-time memory extraction:
+
+```bash
+python -m common.memory update <session_id> --data-file memory-update.json
+```
+
+Record target-system metadata when known:
+
+```bash
+python -m common.memory metadata <session_id> --target-system "<target>"
+```
 
 ## Troubleshooting
 
 ### Python is missing or older than 3.10
 
-Install/select Python 3.10+ and rerun:
-
-```bash
-python doctor.py
-```
+Install/select Python 3.10+ and rerun `python doctor.py`.
 
 ### Required skill file missing
 
-Restore the complete `awayout-security` directory. Do not replace individual controller/API files with unrelated revisions.
+Restore the complete `awayout-security` directory. Do not replace individual files with unrelated revisions.
 
 ### Controller import failure
 
@@ -123,12 +145,7 @@ Run from a writable directory or specify another store location:
 python api.py --store <writable-path> get-active
 ```
 
-### Session ID forgotten
-
-```bash
-python api.py get-active
-python api.py list-sessions
-```
+The report root becomes the parent directory of that store.
 
 ### Agent stopped unexpectedly
 
@@ -140,13 +157,15 @@ Persisted state is authoritative. Repeat only work that had not yet been success
 
 ### Invalid transition
 
-Inspect current state:
-
 ```bash
 python api.py get-state <session_id>
 ```
 
-Then perform only the returned action. For payload details, read the selected algorithm's `SKILL.md`.
+Perform only the returned action.
+
+### Report looks incomplete
+
+Check the matching session JSON first. The archiver never invents missing raw content. If a Prompt/response/score was never persisted, the report cannot reconstruct it from chat history.
 
 ### Shell quoting / multiline content
 
