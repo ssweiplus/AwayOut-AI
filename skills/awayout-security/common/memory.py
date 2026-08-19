@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from common.report import sync_report
+
 MEMORY_TYPES = {
     "exact_fact",
     "confirmed_fact",
@@ -23,11 +25,7 @@ def _now() -> str:
 
 
 def empty_working_memory() -> dict[str, Any]:
-    return {
-        "version": 1,
-        "items": [],
-        "updated_at": None,
-    }
+    return {"version": 1, "items": [], "updated_at": None}
 
 
 def memory_extraction_contract() -> dict[str, Any]:
@@ -53,24 +51,6 @@ def memory_extraction_contract() -> dict[str, Any]:
             "relevance_to_objective": "1..10",
             "relation_to_objective": sorted(RELATIONS),
             "status": sorted(STATUSES),
-        },
-        "preferred_output": {
-            "memory_update": {
-                "items": [
-                    {
-                        "type": "confirmed_fact",
-                        "content": "...",
-                        "details": {},
-                        "evidence": "...",
-                        "source_ref": "...",
-                        "confidence": 0.9,
-                        "importance": 8,
-                        "relevance_to_objective": 9,
-                        "relation_to_objective": "supporting",
-                        "status": "confirmed",
-                    }
-                ]
-            }
         },
     }
 
@@ -135,8 +115,7 @@ def apply_memory_update(runtime: dict[str, Any], update: dict[str, Any]) -> dict
         memory = empty_working_memory()
     memory.setdefault("version", 1)
     existing = memory.setdefault("items", [])
-    normalized = normalize_memory_update(update)
-    existing.extend(normalized["items"])
+    existing.extend(normalize_memory_update(update)["items"])
     memory["updated_at"] = _now()
     runtime["working_memory"] = memory
     return memory
@@ -147,38 +126,16 @@ def build_memory_context(document: dict[str, Any], max_semantic: int = 12, max_e
     memory = runtime.get("working_memory") if isinstance(runtime.get("working_memory"), dict) else empty_working_memory()
     items = [item for item in memory.get("items", []) if isinstance(item, dict)]
     active = [item for item in items if item.get("status") not in {"stale", "superseded"}]
-
     exact = [item for item in active if item.get("type") == "exact_fact"]
     semantic = [item for item in active if item.get("type") != "exact_fact"]
-    semantic.sort(
-        key=lambda item: (
-            int(item.get("relevance_to_objective", 0)),
-            int(item.get("importance", 0)),
-            float(item.get("confidence", 0)),
-        ),
-        reverse=True,
-    )
+    semantic.sort(key=lambda item: (int(item.get("relevance_to_objective", 0)), int(item.get("importance", 0)), float(item.get("confidence", 0))), reverse=True)
     evidence = [item for item in active if str(item.get("evidence", "")).strip()]
-    evidence.sort(
-        key=lambda item: (
-            int(item.get("relevance_to_objective", 0)),
-            int(item.get("importance", 0)),
-        ),
-        reverse=True,
-    )
-
+    evidence.sort(key=lambda item: (int(item.get("relevance_to_objective", 0)), int(item.get("importance", 0))), reverse=True)
     return {
         "policy": "objective + exact facts + top semantic memory + recent full response + top evidence",
         "exact_facts": exact,
         "semantic_memory": semantic[:max_semantic],
-        "evidence_snippets": [
-            {
-                "source_ref": item.get("source_ref"),
-                "type": item.get("type"),
-                "evidence": item.get("evidence"),
-            }
-            for item in evidence[:max_evidence]
-        ],
+        "evidence_snippets": [{"source_ref": item.get("source_ref"), "type": item.get("type"), "evidence": item.get("evidence")} for item in evidence[:max_evidence]],
         "raw_history_rule": "Always keep full raw history in the session/report. For mutation, include the most recent full target response by default; retrieve older raw text only when memory/evidence indicates it is needed.",
     }
 
@@ -203,24 +160,38 @@ def main() -> int:
     show = sub.add_parser("context")
     show.add_argument("session_id")
 
+    metadata = sub.add_parser("metadata")
+    metadata.add_argument("session_id")
+    metadata.add_argument("--target-system")
+
     args = parser.parse_args()
-    path = _session_path(Path(args.store), args.session_id)
+    store = Path(args.store)
+    path = _session_path(store, args.session_id)
     document = json.loads(path.read_text(encoding="utf-8"))
+    runtime = document.get("_runtime") if isinstance(document.get("_runtime"), dict) else {}
 
     if args.command == "update":
         if args.data and args.data_file:
             raise ValueError("use either --data or --data-file")
         raw = Path(args.data_file).read_text(encoding="utf-8") if args.data_file else (args.data or "")
         payload = json.loads(raw)
-        runtime = document.get("_runtime") if isinstance(document.get("_runtime"), dict) else {}
-        memory = apply_memory_update(runtime, payload.get("memory_update", payload))
-        runtime["updated_at"] = _now()
-        document["_runtime"] = runtime
-        path.write_text(json.dumps(document, ensure_ascii=False, indent=2), encoding="utf-8")
-        result = {"success": True, "working_memory": memory}
+        result_value = apply_memory_update(runtime, payload.get("memory_update", payload))
+        result = {"success": True, "working_memory": result_value}
+    elif args.command == "metadata":
+        meta = runtime.get("metadata") if isinstance(runtime.get("metadata"), dict) else {}
+        if args.target_system:
+            meta["target_system"] = args.target_system.strip()
+        runtime["metadata"] = meta
+        result = {"success": True, "metadata": meta}
     else:
-        result = {"success": True, "memory_context": build_memory_context(document)}
+        print(json.dumps({"success": True, "memory_context": build_memory_context(document)}, ensure_ascii=False, indent=2))
+        return 0
 
+    runtime.setdefault("created_at", _now())
+    runtime["updated_at"] = _now()
+    document["_runtime"] = runtime
+    path.write_text(json.dumps(document, ensure_ascii=False, indent=2), encoding="utf-8")
+    sync_report(document, store.parent)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 
