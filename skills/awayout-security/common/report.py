@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +24,15 @@ def _nodes(document: dict[str, Any]) -> list[dict[str, Any]]:
     return []
 
 
+def _node_ref(document: dict[str, Any], node: dict[str, Any]) -> str:
+    algorithm = _text(document.get("algorithm")).upper()
+    if algorithm in {"PAIR", "TAP"}:
+        return _text(node.get("node_id"))
+    if algorithm in {"DRATTACK", "DR_ATTACK"}:
+        return _text(node.get("strategy"))
+    return ""
+
+
 def _round_title(index: int) -> str:
     return f"round{index:02d}.md"
 
@@ -41,14 +49,20 @@ def _status(node: dict[str, Any], threshold: int) -> str:
     return "✅ 成功" if score >= threshold else "❌ 未达标"
 
 
-def _feedback_for_node(runtime: dict[str, Any], node: dict[str, Any]) -> list[dict[str, Any]]:
-    # Feedback is always archived in full. Precise injection-point linkage may be
-    # absent in legacy sessions, so keep state/time metadata instead of guessing.
+def _feedback_for_node(document: dict[str, Any], node: dict[str, Any]) -> list[dict[str, Any]]:
+    runtime = _runtime(document)
+    ref = _node_ref(document, node)
+    return [
+        item for item in runtime.get("feedback", [])
+        if isinstance(item, dict) and ref and _text(item.get("source_ref")) == ref
+    ]
+
+
+def _session_feedback(runtime: dict[str, Any]) -> list[dict[str, Any]]:
     return [item for item in runtime.get("feedback", []) if isinstance(item, dict)]
 
 
 def _round_markdown(document: dict[str, Any], node: dict[str, Any], index: int, total: int) -> str:
-    runtime = _runtime(document)
     threshold = int(document.get("threshold", 7))
     algorithm = _text(document.get("algorithm")).upper()
     strategy = _text(node.get("strategy")) or _text(node.get("improvement")) or "未记录"
@@ -56,7 +70,7 @@ def _round_markdown(document: dict[str, Any], node: dict[str, Any], index: int, 
     response = _text(node.get("response"))
     score = _score(node)
     reason = _text(node.get("reason")) or "尚未评分。"
-    feedback = _feedback_for_node(runtime, node)
+    feedback = _feedback_for_node(document, node)
     feedback_text = "无"
     if feedback:
         feedback_text = "\n".join(
@@ -76,7 +90,7 @@ def _round_markdown(document: dict[str, Any], node: dict[str, Any], index: int, 
 | 策略 | {strategy} |
 | 评分 | {score if score is not None else '未评分'}/10 |
 | 状态 | {_status(node, threshold)} |
-| 操作员反馈 | 见下方原文 |
+| 操作员反馈 | {'有' if feedback else '无'} |
 
 ## Prompt
 ```text
@@ -137,6 +151,32 @@ def _turning_points(document: dict[str, Any], nodes: list[dict[str, Any]]) -> li
     return points
 
 
+def _key_findings(runtime: dict[str, Any]) -> str:
+    memory = runtime.get("working_memory") if isinstance(runtime.get("working_memory"), dict) else {}
+    items = [
+        item for item in memory.get("items", [])
+        if isinstance(item, dict)
+        and item.get("status") not in {"stale", "superseded"}
+        and _text(item.get("content"))
+    ]
+    items.sort(
+        key=lambda item: (
+            int(item.get("relevance_to_objective", 0)),
+            int(item.get("importance", 0)),
+            float(item.get("confidence", 0)),
+        ),
+        reverse=True,
+    )
+    selected = items[:5]
+    if not selected:
+        return "1. 暂无已沉淀的高置信关键发现。"
+    return "\n".join(
+        f"{idx}. {_text(item.get('content'))}"
+        + (f"（来源：{_text(item.get('source_ref'))}）" if _text(item.get('source_ref')) else "")
+        for idx, item in enumerate(selected, 1)
+    )
+
+
 def _summary(document: dict[str, Any], nodes: list[dict[str, Any]]) -> str:
     runtime = _runtime(document)
     scores = [_score(n) for n in nodes if _score(n) is not None]
@@ -153,6 +193,7 @@ def _summary(document: dict[str, Any], nodes: list[dict[str, Any]]) -> str:
         if key in document:
             config_fields.append(f"{key}={document.get(key)}")
     links = "\n".join(f"- [Round {i}](RESPONSES/{_round_title(i)})" for i in range(1, len(nodes) + 1)) or "- 暂无轮次"
+    feedback_count = len(_session_feedback(runtime))
 
     return f"""# 测试总览
 
@@ -166,6 +207,7 @@ def _summary(document: dict[str, Any], nodes: list[dict[str, Any]]) -> str:
 - 测试时长：由时间戳计算；若中断则以最后更新时间为止
 - 最佳评分：{best if best is not None else '未评分'}
 - 成功尝试数：{success_count}
+- 操作员反馈数：{feedback_count}
 - 最终状态：{state or '未记录'}
 
 ## 测试结果
@@ -173,7 +215,7 @@ def _summary(document: dict[str, Any], nodes: list[dict[str, Any]]) -> str:
 - 评分趋势：{scores}
 
 ## 关键发现（3-5条）
-由 `working_memory` 中高重要度、高相关度事实自动沉淀；原始证据请查看对应轮次。
+{_key_findings(runtime)}
 
 ## 防御建议（2-4条）
 在测试完成后基于真实路径填写；不要脱离记录猜测。
@@ -242,6 +284,7 @@ def _strategy_markdown(nodes: list[dict[str, Any]]) -> str:
 
 
 def _attack_pattern(document: dict[str, Any], nodes: list[dict[str, Any]]) -> str:
+    runtime = _runtime(document)
     strategies: dict[str, list[int]] = {}
     for idx, node in enumerate(nodes, 1):
         strategy = _text(node.get("strategy")) or _text(node.get("improvement")) or "未记录"
@@ -251,7 +294,14 @@ def _attack_pattern(document: dict[str, Any], nodes: list[dict[str, Any]]) -> st
         scores = [_score(nodes[i - 1]) for i in rounds if _score(nodes[i - 1]) is not None]
         effect = f"最高 {max(scores)}/10" if scores else "未评分"
         lines.append(f"| {strategy} | {','.join(map(str, rounds))} | {effect} | 以轮次原文和评分理由为准 |")
-    lines.extend(["", "## 外部情报（操作员反馈）的作用", "", "操作员反馈完整保存在各轮归档和 session `_runtime.feedback` 中。", ""])
+    lines.extend(["", "## 外部情报（操作员反馈）的作用", ""])
+    feedback = _session_feedback(runtime)
+    if feedback:
+        for item in feedback:
+            lines.append(f"- {_text(item.get('created_at'))} / source={_text(item.get('source_ref')) or 'session-level'}: {_text(item.get('text'))}")
+    else:
+        lines.append("无操作员反馈。")
+    lines.append("")
     return "\n".join(lines)
 
 
