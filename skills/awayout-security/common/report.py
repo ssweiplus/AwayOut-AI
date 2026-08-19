@@ -15,9 +15,7 @@ def _runtime(document: dict[str, Any]) -> dict[str, Any]:
 
 def _nodes(document: dict[str, Any]) -> list[dict[str, Any]]:
     algorithm = _text(document.get("algorithm")).upper()
-    if algorithm == "PAIR":
-        return [n for n in document.get("nodes", []) if isinstance(n, dict)]
-    if algorithm == "TAP":
+    if algorithm in {"PAIR", "TAP"}:
         return [n for n in document.get("nodes", []) if isinstance(n, dict)]
     if algorithm in {"DRATTACK", "DR_ATTACK"}:
         return [n for n in document.get("strategy_nodes", []) if isinstance(n, dict)]
@@ -49,17 +47,42 @@ def _status(node: dict[str, Any], threshold: int) -> str:
     return "✅ 成功" if score >= threshold else "❌ 未达标"
 
 
-def _feedback_for_node(document: dict[str, Any], node: dict[str, Any]) -> list[dict[str, Any]]:
-    runtime = _runtime(document)
-    ref = _node_ref(document, node)
+def _linked(runtime: dict[str, Any], key: str, ref: str) -> list[dict[str, Any]]:
     return [
-        item for item in runtime.get("feedback", [])
+        item for item in runtime.get(key, [])
         if isinstance(item, dict) and ref and _text(item.get("source_ref")) == ref
     ]
 
 
-def _session_feedback(runtime: dict[str, Any]) -> list[dict[str, Any]]:
-    return [item for item in runtime.get("feedback", []) if isinstance(item, dict)]
+def _feedback_for_node(document: dict[str, Any], node: dict[str, Any]) -> list[dict[str, Any]]:
+    return _linked(_runtime(document), "feedback", _node_ref(document, node))
+
+
+def _events_for_node(document: dict[str, Any], node: dict[str, Any]) -> list[dict[str, Any]]:
+    return _linked(_runtime(document), "operator_events", _node_ref(document, node))
+
+
+def _session_items(runtime: dict[str, Any], key: str) -> list[dict[str, Any]]:
+    return [item for item in runtime.get(key, []) if isinstance(item, dict)]
+
+
+def _format_feedback(items: list[dict[str, Any]]) -> str:
+    if not items:
+        return "无"
+    return "\n".join(
+        f"- {item.get('created_at', '')}: {item.get('text', '')}"
+        for item in items
+    )
+
+
+def _format_events(items: list[dict[str, Any]]) -> str:
+    if not items:
+        return "无"
+    return "\n".join(
+        f"- {item.get('created_at', '')} / {item.get('timing', 'unspecified')} / "
+        f"`{item.get('event_type', 'other')}`：{item.get('description', '')}"
+        for item in items
+    )
 
 
 def _round_markdown(document: dict[str, Any], node: dict[str, Any], index: int, total: int) -> str:
@@ -71,12 +94,7 @@ def _round_markdown(document: dict[str, Any], node: dict[str, Any], index: int, 
     score = _score(node)
     reason = _text(node.get("reason")) or "尚未评分。"
     feedback = _feedback_for_node(document, node)
-    feedback_text = "无"
-    if feedback:
-        feedback_text = "\n".join(
-            f"- {item.get('created_at', '')} / state={item.get('state', '')}: {item.get('text', '')}"
-            for item in feedback
-        )
+    events = _events_for_node(document, node)
 
     return f"""# Round {index}
 
@@ -90,7 +108,14 @@ def _round_markdown(document: dict[str, Any], node: dict[str, Any], index: int, 
 | 策略 | {strategy} |
 | 评分 | {score if score is not None else '未评分'}/10 |
 | 状态 | {_status(node, threshold)} |
-| 操作员反馈 | {'有' if feedback else '无'} |
+| 特殊人工操作 | {'有' if events else '无'} |
+| 操作员意见 | {'有' if feedback else '无'} |
+
+## 测试者操作
+{_format_events(events)}
+
+## 操作员意见
+{_format_feedback(feedback)}
 
 ## Prompt
 ```text
@@ -105,12 +130,10 @@ def _round_markdown(document: dict[str, Any], node: dict[str, Any], index: int, 
 ## 评分理由
 {reason}
 
-## 操作员反馈原文
-{feedback_text}
-
 ## 关联分析
 - 与前几轮的关联：由 `ATTACK_PATTERN.md` / `strategy-evolution.md` 汇总。
-- 对后续测试的影响：由 Working Memory 和后续评分记录确定。
+- 对后续测试的影响：由 Working Memory、评分和本轮测试条件共同判断。
+- 若本轮存在新开会话、切换账号、重置上下文等操作，评分变化不能默认完全归因于 Prompt 策略。
 """
 
 
@@ -124,6 +147,8 @@ def _turning_points(document: dict[str, Any], nodes: list[dict[str, Any]]) -> li
     for idx, node in enumerate(nodes, 1):
         score = _score(node)
         strategy = _text(node.get("strategy")) or _text(node.get("improvement"))
+        events = _events_for_node(document, node)
+        feedback = _feedback_for_node(document, node)
         kinds: list[str] = []
         if score is not None and score >= threshold and not reached:
             kinds.append("评分首次达标")
@@ -135,6 +160,10 @@ def _turning_points(document: dict[str, Any], nodes: list[dict[str, Any]]) -> li
             kinds.append("评分变化 ≥ 3")
         if previous_strategy and strategy and strategy != previous_strategy:
             kinds.append("策略重大切换")
+        if events:
+            kinds.append("测试条件发生变化")
+        if feedback and score is not None and previous_score is not None and score != previous_score:
+            kinds.append("操作员反馈可能影响结果")
         if kinds:
             points.append({
                 "round": idx,
@@ -143,6 +172,7 @@ def _turning_points(document: dict[str, Any], nodes: list[dict[str, Any]]) -> li
                 "to_score": score,
                 "strategy": strategy,
                 "reason": _text(node.get("reason")),
+                "events": events,
             })
         if score is not None:
             previous_score = score
@@ -193,7 +223,8 @@ def _summary(document: dict[str, Any], nodes: list[dict[str, Any]]) -> str:
         if key in document:
             config_fields.append(f"{key}={document.get(key)}")
     links = "\n".join(f"- [Round {i}](RESPONSES/{_round_title(i)})" for i in range(1, len(nodes) + 1)) or "- 暂无轮次"
-    feedback_count = len(_session_feedback(runtime))
+    feedback_count = len(_session_items(runtime, "feedback"))
+    event_count = len(_session_items(runtime, "operator_events"))
 
     return f"""# 测试总览
 
@@ -207,7 +238,8 @@ def _summary(document: dict[str, Any], nodes: list[dict[str, Any]]) -> str:
 - 测试时长：由时间戳计算；若中断则以最后更新时间为止
 - 最佳评分：{best if best is not None else '未评分'}
 - 成功尝试数：{success_count}
-- 操作员反馈数：{feedback_count}
+- 特殊人工操作数：{event_count}
+- 操作员意见数：{feedback_count}
 - 最终状态：{state or '未记录'}
 
 ## 测试结果
@@ -249,9 +281,15 @@ def _turning_markdown(document: dict[str, Any], nodes: list[dict[str, Any]]) -> 
             "",
             "**突破方式：**",
             f"策略/方向：{point['strategy'] or '未记录'}",
+        ])
+        if point["events"]:
+            lines.append("测试条件变化：" + "；".join(_text(item.get("description")) for item in point["events"]))
+        lines.extend([
             "",
             "**关键洞察：**",
             point["reason"] or "以对应轮次证据为准。",
+            "",
+            "若同时存在测试条件变化，应避免把评分变化完全归因于 Prompt 策略。",
             "",
             f"[查看 Round {rnd}](RESPONSES/{_round_title(rnd)})",
             "",
@@ -266,18 +304,19 @@ def _tree_markdown(document: dict[str, Any], nodes: list[dict[str, Any]]) -> str
         strategy = _text(node.get("strategy")) or _text(node.get("improvement")) or "unknown"
         score = _score(node)
         prompt = _text(node.get("prompt")).replace("\n", " ")[:80]
-        lines.append(f"└─ Round {idx} [{score if score is not None else '?'}/10] {strategy} :: {prompt}")
+        event_mark = " +EVENT" if _events_for_node(document, node) else ""
+        lines.append(f"└─ Round {idx} [{score if score is not None else '?'}/10] {strategy}{event_mark} :: {prompt}")
     lines.extend(["```", "", "## 评分趋势可视化", "", f"{scores}", "", "## 关键路径", "", "参见 [ATTACK_PATTERN.md](ATTACK_PATTERN.md) 与 [TURNING_POINTS.md](TURNING_POINTS.md)。", ""])
     return "\n".join(lines)
 
 
 def _strategy_markdown(nodes: list[dict[str, Any]]) -> str:
-    lines = ["# 策略演化路径", "", "## 策略切换决策逻辑", "", "以下时间线从持久化节点生成；具体切换原因以评分理由、人工反馈和 Working Memory 为准。", "", "## 策略切换时间线", "", "| 时机 | 原策略 | 新策略 | 原因 |", "|------|--------|--------|------|"]
+    lines = ["# 策略演化路径", "", "## 策略切换决策逻辑", "", "以下时间线从持久化节点生成；具体切换原因以评分理由、人工意见、人工操作和 Working Memory 为准。", "", "## 策略切换时间线", "", "| 时机 | 原策略 | 新策略 | 原因 |", "|------|--------|--------|------|"]
     previous = ""
     for idx, node in enumerate(nodes, 1):
         current = _text(node.get("strategy")) or _text(node.get("improvement")) or "未记录"
         if previous and current != previous:
-            lines.append(f"| Round {idx} | {previous} | {current} | {_text(node.get('reason')) or '由后续评分/反馈驱动'} |")
+            lines.append(f"| Round {idx} | {previous} | {current} | {_text(node.get('reason')) or '由后续评分/人工信息驱动'} |")
         previous = current
     lines.extend(["", "## 各策略最佳适用场景", "", "由实际测试结果总结；不要脱离真实轮次自动臆测。", ""])
     return "\n".join(lines)
@@ -289,18 +328,27 @@ def _attack_pattern(document: dict[str, Any], nodes: list[dict[str, Any]]) -> st
     for idx, node in enumerate(nodes, 1):
         strategy = _text(node.get("strategy")) or _text(node.get("improvement")) or "未记录"
         strategies.setdefault(strategy, []).append(idx)
-    lines = ["# 攻击链路与策略分析", "", "## 攻击阶段划分", "", "阶段划分需结合真实评分趋势与转折点复盘。", "", "## 核心攻击链路", "", "参见 [关键转折点](TURNING_POINTS.md) 和完整轮次原文。", "", "## 策略组合有效性分析", "", "| 策略 | 使用轮次 | 效果 | 说明 |", "|------|----------|------|------|"]
+    lines = ["# 攻击链路与策略分析", "", "## 攻击阶段划分", "", "阶段划分需结合真实评分趋势、人工操作和转折点复盘。", "", "## 核心攻击链路", "", "参见 [关键转折点](TURNING_POINTS.md) 和完整轮次原文。", "", "## 策略组合有效性分析", "", "| 策略 | 使用轮次 | 效果 | 说明 |", "|------|----------|------|------|"]
     for strategy, rounds in strategies.items():
         scores = [_score(nodes[i - 1]) for i in rounds if _score(nodes[i - 1]) is not None]
         effect = f"最高 {max(scores)}/10" if scores else "未评分"
-        lines.append(f"| {strategy} | {','.join(map(str, rounds))} | {effect} | 以轮次原文和评分理由为准 |")
-    lines.extend(["", "## 外部情报（操作员反馈）的作用", ""])
-    feedback = _session_feedback(runtime)
+        lines.append(f"| {strategy} | {','.join(map(str, rounds))} | {effect} | 以轮次原文、评分理由和测试条件为准 |")
+
+    lines.extend(["", "## 测试者特殊操作", ""])
+    events = _session_items(runtime, "operator_events")
+    if events:
+        for item in events:
+            lines.append(f"- {_text(item.get('created_at'))} / source={_text(item.get('source_ref')) or 'session-level'} / `{_text(item.get('event_type')) or 'other'}`: {_text(item.get('description'))}")
+    else:
+        lines.append("无特殊人工操作。")
+
+    lines.extend(["", "## 外部情报（操作员意见）的作用", ""])
+    feedback = _session_items(runtime, "feedback")
     if feedback:
         for item in feedback:
             lines.append(f"- {_text(item.get('created_at'))} / source={_text(item.get('source_ref')) or 'session-level'}: {_text(item.get('text'))}")
     else:
-        lines.append("无操作员反馈。")
+        lines.append("无操作员意见。")
     lines.append("")
     return "\n".join(lines)
 
