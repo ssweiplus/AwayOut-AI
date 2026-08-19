@@ -1,0 +1,275 @@
+from __future__ import annotations
+
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+
+def _text(value: Any) -> str:
+    return str(value if value is not None else "").strip()
+
+
+def _runtime(document: dict[str, Any]) -> dict[str, Any]:
+    value = document.get("_runtime")
+    return value if isinstance(value, dict) else {}
+
+
+def _nodes(document: dict[str, Any]) -> list[dict[str, Any]]:
+    algorithm = _text(document.get("algorithm")).upper()
+    if algorithm == "PAIR":
+        return [n for n in document.get("nodes", []) if isinstance(n, dict)]
+    if algorithm == "TAP":
+        return [n for n in document.get("nodes", []) if isinstance(n, dict)]
+    if algorithm in {"DRATTACK", "DR_ATTACK"}:
+        return [n for n in document.get("strategy_nodes", []) if isinstance(n, dict)]
+    return []
+
+
+def _round_title(index: int) -> str:
+    return f"round{index:02d}.md"
+
+
+def _score(node: dict[str, Any]) -> int | None:
+    value = node.get("score")
+    return int(value) if value is not None else None
+
+
+def _status(node: dict[str, Any], threshold: int) -> str:
+    score = _score(node)
+    if score is None:
+        return "⏳ 未评分"
+    return "✅ 成功" if score >= threshold else "❌ 未达标"
+
+
+def _feedback_for_node(runtime: dict[str, Any], node: dict[str, Any]) -> list[dict[str, Any]]:
+    # Feedback is always archived in full. Precise injection-point linkage may be
+    # absent in legacy sessions, so keep state/time metadata instead of guessing.
+    return [item for item in runtime.get("feedback", []) if isinstance(item, dict)]
+
+
+def _round_markdown(document: dict[str, Any], node: dict[str, Any], index: int, total: int) -> str:
+    runtime = _runtime(document)
+    threshold = int(document.get("threshold", 7))
+    algorithm = _text(document.get("algorithm")).upper()
+    strategy = _text(node.get("strategy")) or _text(node.get("improvement")) or "未记录"
+    prompt = _text(node.get("prompt"))
+    response = _text(node.get("response"))
+    score = _score(node)
+    reason = _text(node.get("reason")) or "尚未评分。"
+    feedback = _feedback_for_node(runtime, node)
+    feedback_text = "无"
+    if feedback:
+        feedback_text = "\n".join(
+            f"- {item.get('created_at', '')} / state={item.get('state', '')}: {item.get('text', '')}"
+            for item in feedback
+        )
+
+    return f"""# Round {index}
+
+[← SUMMARY](../SUMMARY.md) · [prompt-tree](../prompt-tree.md)
+
+## 元数据
+| 字段 | 值 |
+|------|-----|
+| 轮次 | {index}/{total} |
+| 算法 | {algorithm} |
+| 策略 | {strategy} |
+| 评分 | {score if score is not None else '未评分'}/10 |
+| 状态 | {_status(node, threshold)} |
+| 操作员反馈 | 见下方原文 |
+
+## Prompt
+```text
+{prompt}
+```
+
+## 目标系统响应
+```text
+{response}
+```
+
+## 评分理由
+{reason}
+
+## 操作员反馈原文
+{feedback_text}
+
+## 关联分析
+- 与前几轮的关联：由 `ATTACK_PATTERN.md` / `strategy-evolution.md` 汇总。
+- 对后续测试的影响：由 Working Memory 和后续评分记录确定。
+"""
+
+
+def _turning_points(document: dict[str, Any], nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    threshold = int(document.get("threshold", 7))
+    points: list[dict[str, Any]] = []
+    previous_score: int | None = None
+    previous_strategy = ""
+    reached = False
+    full = False
+    for idx, node in enumerate(nodes, 1):
+        score = _score(node)
+        strategy = _text(node.get("strategy")) or _text(node.get("improvement"))
+        kinds: list[str] = []
+        if score is not None and score >= threshold and not reached:
+            kinds.append("评分首次达标")
+            reached = True
+        if score == 10 and not full:
+            kinds.append("评分首次满分")
+            full = True
+        if score is not None and previous_score is not None and abs(score - previous_score) >= 3:
+            kinds.append("评分变化 ≥ 3")
+        if previous_strategy and strategy and strategy != previous_strategy:
+            kinds.append("策略重大切换")
+        if kinds:
+            points.append({
+                "round": idx,
+                "types": kinds,
+                "from_score": previous_score,
+                "to_score": score,
+                "strategy": strategy,
+                "reason": _text(node.get("reason")),
+            })
+        if score is not None:
+            previous_score = score
+        if strategy:
+            previous_strategy = strategy
+    return points
+
+
+def _summary(document: dict[str, Any], nodes: list[dict[str, Any]]) -> str:
+    runtime = _runtime(document)
+    scores = [_score(n) for n in nodes if _score(n) is not None]
+    best = max(scores) if scores else None
+    threshold = int(document.get("threshold", 7))
+    success_count = sum(1 for s in scores if s is not None and s >= threshold)
+    state = _text(document.get("state"))
+    result = "成功" if success_count else ("进行中" if state != "DONE" else "失败")
+    metadata = runtime.get("metadata") if isinstance(runtime.get("metadata"), dict) else {}
+    started = _text(runtime.get("created_at")) or "未记录"
+    updated = _text(runtime.get("updated_at")) or "未记录"
+    config_fields = []
+    for key in ("max_iterations", "threshold", "stop_policy", "branch_factor", "max_depth", "width", "top_k_synonyms", "strategies"):
+        if key in document:
+            config_fields.append(f"{key}={document.get(key)}")
+    links = "\n".join(f"- [Round {i}](RESPONSES/{_round_title(i)})" for i in range(1, len(nodes) + 1)) or "- 暂无轮次"
+
+    return f"""# 测试总览
+
+## 测试元数据
+- 会话 ID：{document.get('session_id', '')}
+- 测试目标：{document.get('objective', '')}
+- 目标系统：{metadata.get('target_system', '未填写')}
+- 算法：{document.get('algorithm', '')}
+- 配置：{'; '.join(config_fields) if config_fields else '未记录'}
+- 测试时间：{started} ~ {updated}
+- 测试时长：由时间戳计算；若中断则以最后更新时间为止
+- 最佳评分：{best if best is not None else '未评分'}
+- 成功尝试数：{success_count}
+- 最终状态：{state or '未记录'}
+
+## 测试结果
+- 状态：{result}
+- 评分趋势：{scores}
+
+## 关键发现（3-5条）
+由 `working_memory` 中高重要度、高相关度事实自动沉淀；原始证据请查看对应轮次。
+
+## 防御建议（2-4条）
+在测试完成后基于真实路径填写；不要脱离记录猜测。
+
+## 归档导航
+- [攻击链路与策略分析](ATTACK_PATTERN.md)
+- [关键转折点](TURNING_POINTS.md)
+- [完整决策树](prompt-tree.md)
+- [策略演化](strategy-evolution.md)
+
+### 完整轮次
+{links}
+"""
+
+
+def _turning_markdown(document: dict[str, Any], nodes: list[dict[str, Any]]) -> str:
+    points = _turning_points(document, nodes)
+    lines = ["# 关键转折点", ""]
+    if not points:
+        lines.append("当前尚未命中自动判定的关键转折点。")
+        return "\n".join(lines) + "\n"
+    for point in points:
+        rnd = point["round"]
+        lines.extend([
+            f"## 转折点：Round {rnd} — {' / '.join(point['types'])}",
+            "",
+            f"**评分变化：** {point['from_score'] if point['from_score'] is not None else 'N/A'} → {point['to_score'] if point['to_score'] is not None else 'N/A'}",
+            "",
+            "**前几轮的困境：**",
+            "以此前轮次的完整响应与评分理由为准。",
+            "",
+            "**突破方式：**",
+            f"策略/方向：{point['strategy'] or '未记录'}",
+            "",
+            "**关键洞察：**",
+            point["reason"] or "以对应轮次证据为准。",
+            "",
+            f"[查看 Round {rnd}](RESPONSES/{_round_title(rnd)})",
+            "",
+        ])
+    return "\n".join(lines)
+
+
+def _tree_markdown(document: dict[str, Any], nodes: list[dict[str, Any]]) -> str:
+    scores = [_score(n) for n in nodes]
+    lines = ["# 完整决策树", "", "## 树状结构", "", "```text", "ROOT"]
+    for idx, node in enumerate(nodes, 1):
+        strategy = _text(node.get("strategy")) or _text(node.get("improvement")) or "unknown"
+        score = _score(node)
+        prompt = _text(node.get("prompt")).replace("\n", " ")[:80]
+        lines.append(f"└─ Round {idx} [{score if score is not None else '?'}/10] {strategy} :: {prompt}")
+    lines.extend(["```", "", "## 评分趋势可视化", "", f"{scores}", "", "## 关键路径", "", "参见 [ATTACK_PATTERN.md](ATTACK_PATTERN.md) 与 [TURNING_POINTS.md](TURNING_POINTS.md)。", ""])
+    return "\n".join(lines)
+
+
+def _strategy_markdown(nodes: list[dict[str, Any]]) -> str:
+    lines = ["# 策略演化路径", "", "## 策略切换决策逻辑", "", "以下时间线从持久化节点生成；具体切换原因以评分理由、人工反馈和 Working Memory 为准。", "", "## 策略切换时间线", "", "| 时机 | 原策略 | 新策略 | 原因 |", "|------|--------|--------|------|"]
+    previous = ""
+    for idx, node in enumerate(nodes, 1):
+        current = _text(node.get("strategy")) or _text(node.get("improvement")) or "未记录"
+        if previous and current != previous:
+            lines.append(f"| Round {idx} | {previous} | {current} | {_text(node.get('reason')) or '由后续评分/反馈驱动'} |")
+        previous = current
+    lines.extend(["", "## 各策略最佳适用场景", "", "由实际测试结果总结；不要脱离真实轮次自动臆测。", ""])
+    return "\n".join(lines)
+
+
+def _attack_pattern(document: dict[str, Any], nodes: list[dict[str, Any]]) -> str:
+    strategies: dict[str, list[int]] = {}
+    for idx, node in enumerate(nodes, 1):
+        strategy = _text(node.get("strategy")) or _text(node.get("improvement")) or "未记录"
+        strategies.setdefault(strategy, []).append(idx)
+    lines = ["# 攻击链路与策略分析", "", "## 攻击阶段划分", "", "阶段划分需结合真实评分趋势与转折点复盘。", "", "## 核心攻击链路", "", "参见 [关键转折点](TURNING_POINTS.md) 和完整轮次原文。", "", "## 策略组合有效性分析", "", "| 策略 | 使用轮次 | 效果 | 说明 |", "|------|----------|------|------|"]
+    for strategy, rounds in strategies.items():
+        scores = [_score(nodes[i - 1]) for i in rounds if _score(nodes[i - 1]) is not None]
+        effect = f"最高 {max(scores)}/10" if scores else "未评分"
+        lines.append(f"| {strategy} | {','.join(map(str, rounds))} | {effect} | 以轮次原文和评分理由为准 |")
+    lines.extend(["", "## 外部情报（操作员反馈）的作用", "", "操作员反馈完整保存在各轮归档和 session `_runtime.feedback` 中。", ""])
+    return "\n".join(lines)
+
+
+def sync_report(document: dict[str, Any], report_root: Path) -> Path:
+    session_id = _text(document.get("session_id"))
+    if not session_id:
+        raise ValueError("session_id is required for report archival")
+    root = report_root / f"test-report-{session_id}"
+    responses = root / "RESPONSES"
+    responses.mkdir(parents=True, exist_ok=True)
+    nodes = _nodes(document)
+
+    for idx, node in enumerate(nodes, 1):
+        (responses / _round_title(idx)).write_text(_round_markdown(document, node, idx, len(nodes)), encoding="utf-8")
+
+    (root / "SUMMARY.md").write_text(_summary(document, nodes), encoding="utf-8")
+    (root / "TURNING_POINTS.md").write_text(_turning_markdown(document, nodes), encoding="utf-8")
+    (root / "prompt-tree.md").write_text(_tree_markdown(document, nodes), encoding="utf-8")
+    (root / "strategy-evolution.md").write_text(_strategy_markdown(nodes), encoding="utf-8")
+    (root / "ATTACK_PATTERN.md").write_text(_attack_pattern(document, nodes), encoding="utf-8")
+    return root
