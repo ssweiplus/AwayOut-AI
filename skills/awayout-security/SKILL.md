@@ -18,6 +18,7 @@ awayout-security/
 ├── common/
 │   ├── store.py
 │   ├── presenter.py
+│   ├── interaction.py
 │   ├── scoring.py
 │   ├── memory.py
 │   └── report.py
@@ -134,8 +135,8 @@ Once the user accepts the configuration and `start-test` is called, execution ha
 ```text
 user responsibility
   = run the displayed Prompt against the authorized target
-  + paste the real target response
-  + optionally send [[AWAYOUT:OPERATOR]] feedback
+  + normally paste the real target response directly
+  + optionally record special tester actions and/or operator comments
 
 host Agent responsibility
   = generate candidates/branches/reconstructions
@@ -224,13 +225,7 @@ partial_achievement
 next_step_hint
 ```
 
-Persist memory before moving on:
-
-```bash
-python -m common.memory update <session_id> --data-file memory-update.json
-```
-
-The file may contain either the `memory_update` object itself or `{ "memory_update": ... }`.
+When scoring through `submit-result`, include `memory_update` in the same result object; `api.py` persists it before continuing. PAIR's compatibility `submit-judgement` also accepts `--memory-data` / `--memory-data-file`.
 
 A response that adds no durable information may produce an empty item list; never invent memory merely to satisfy the mechanism.
 
@@ -298,8 +293,6 @@ Incidental information may be retained but must not drive objective drift. Contr
 
 After the original objective reaches DONE, Working Memory may be used to propose `suggested_follow_up_objectives` based on confirmed facts, blockers and newly exposed test surfaces.
 
-The rule is:
-
 ```text
 current objective DONE
   -> analyze persisted Working Memory + report evidence
@@ -330,49 +323,94 @@ Core archival invariant:
 
 ```text
 Raw Prompt/Response -> copied from persisted controller/session data
+Operator events     -> factual tester actions, source-bound when possible
+Operator comments   -> human judgement/guidance, source-bound when possible
 Working Memory      -> index/compression layer
 Analysis documents  -> derived views
 ```
 
-Never reconstruct raw Prompt/Response from LLM memory. Never omit failed/repeated rounds merely because they seem unimportant. Operator feedback is also retained.
+Never reconstruct raw Prompt/Response from LLM memory. Never omit failed/repeated rounds merely because they seem unimportant. Special tester actions and operator comments are retained separately so result changes are not automatically attributed to Prompt strategy.
 
-Reports are refreshed during the run, so a test that is interrupted still has an archive of all persisted work completed so far.
+Reports are refreshed during the run, so an interrupted test still has an archive of all persisted work completed so far.
 
 ### Preserve the original objective
 
-Intermediate discoveries, previous prompts, target responses, scores, reasons, branch context, Working Memory and operator comments are feedback only. They must not silently replace or narrow the original objective.
+Intermediate discoveries, previous prompts, target responses, scores, reasons, branch context, Working Memory, operator events and operator comments must not silently replace or narrow the original objective.
 
 If the human explicitly wants a different final objective, treat it as a new test.
 
-### Operator comments use one reserved marker
+### Human input has a simple mode and an advanced multi-block mode
 
-Reserved marker:
+**Do not make the tester learn markers for the normal case.**
+
+Normal case:
 
 ```text
+Tester only has a target-system response
+  -> paste the full response directly
+  -> no marker required
+```
+
+Advanced case, only when the tester also needs to record actions/comments:
+
+```text
+[[AWAYOUT:EVENT]]
+新开会话
+
 [[AWAYOUT:OPERATOR]]
+我怀疑新会话影响了这次结果
+
+[[AWAYOUT:RESPONSE]]
+<完整目标系统响应>
 ```
 
-A user message beginning with that exact marker is human tester guidance, never a target-system response.
+The blocks are independent and optional except for this rule:
 
 ```text
-[[AWAYOUT:OPERATOR]] <comment>
-  -> remove marker
-  -> persist remaining text with add-feedback
-  -> do not submit it as a target response
-  -> do not advance algorithm state
+if any [[AWAYOUT:*]] marker is used
+and a target response is being submitted in that message
+then the target response MUST be inside [[AWAYOUT:RESPONSE]]
 ```
 
-Command:
+Semantics:
+
+```text
+[[AWAYOUT:EVENT]]
+  factual tester action / test-condition change
+  examples: new target session, reset context, switch account/tenant/model, relogin, wait-and-retry
+  persist in _runtime.operator_events
+
+[[AWAYOUT:OPERATOR]]
+  tester judgement, observation or guidance
+  persist in _runtime.feedback
+
+[[AWAYOUT:RESPONSE]]
+  actual target-system response
+  submit to the current algorithm state
+```
+
+EVENT and OPERATOR blocks never count as the target response. A message containing only EVENT/OPERATOR blocks is persisted but does not advance the round.
+
+At every human target interaction, the host Agent MUST pass the tester's complete reply unchanged to:
 
 ```bash
-python api.py add-feedback <session_id> --feedback "<comment>"
+python api.py submit-user-input <session_id> --message-file user-input.txt
 ```
+
+Do not manually split or classify the message in the host Agent. `common/interaction.py` owns parsing.
 
 ### Human target interaction is presenter-owned
 
-Whenever `handoff.kind = human_target_interaction`, display `handoff.presentation.rendered_text` exactly once when provided. Do not rebuild, merge, summarize or paraphrase the layout from chat memory or controller fields.
+Whenever `handoff.kind = human_target_interaction`, display `handoff.presentation.rendered_text` exactly once. Do not rebuild, merge, summarize or paraphrase the layout.
 
-PAIR, TAP and DrAttack target-test interactions use this presentation mode.
+PAIR, TAP, DrAttack baseline and DrAttack strategy target-test interactions all use the same tester reply rules:
+
+```text
+normal -> paste response directly
+advanced -> EVENT / OPERATOR / RESPONSE blocks in one message
+```
+
+The Prompt copy block must remain isolated from instructions and metadata.
 
 ### Final result is presenter-owned
 
@@ -382,7 +420,7 @@ After final result presentation, follow-up-objective suggestions may be produced
 
 ### Checkpoint and resume
 
-Every successful `submit-*` / `submit-result`, memory update, metadata update and feedback mutation is persisted. After restart/context loss, resume from storage; do not infer where execution stopped.
+Every successful controller submission, user-input submission, memory update, metadata update, operator event and feedback mutation is persisted. After restart/context loss, resume from storage; do not infer where execution stopped.
 
 ### Only AwayOut may finish a run
 
@@ -407,12 +445,19 @@ python api.py get-state <session_id>
 python api.py get-tree <session_id>
 python api.py get-summary <session_id>
 
+# Preferred human-interaction entrypoint
+python api.py submit-user-input <session_id> --message-file user-input.txt
+
+# Compatibility / explicit mutations
+python api.py add-feedback <session_id> --feedback "<comment>"
+python api.py add-event <session_id> --event-type other --description "<tester action>"
+
 python -m common.memory context <session_id>
 python -m common.memory update <session_id> --data-file memory-update.json
 python -m common.memory metadata <session_id> --target-system "<target>"
 ```
 
-Shared structured handoff submission:
+Shared structured internal handoff submission:
 
 ```bash
 python api.py submit-result <session_id> --data-file result.json
