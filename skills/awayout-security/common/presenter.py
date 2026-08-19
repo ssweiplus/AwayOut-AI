@@ -93,6 +93,49 @@ def _transition_summary(lines: list[str], action: dict) -> None:
         lines.append(text)
 
 
+def render_generic_target_interaction(
+    action: dict,
+    title: str,
+    prompt: str,
+    latest_feedback: dict | None = None,
+    latest_event: dict | None = None,
+) -> dict:
+    value = _text(prompt)
+    if not value:
+        raise ValueError("target interaction template requires a non-empty prompt")
+    lines = [f"## {title}"]
+    _transition_summary(lines, action)
+    feedback_text, event_text = _current_operator_context(lines, latest_feedback, latest_event)
+    lines.extend([
+        "",
+        "---",
+        "",
+        "### 请只复制下面的 Prompt",
+        "",
+        _fenced_text(value),
+        "",
+        "---",
+        "",
+        "### 测试步骤",
+        "1. 只复制上面的 Prompt 代码块内容到目标系统。",
+        "2. 获取目标系统响应后，按下方说明回复本对话。",
+        "3. 后续分析和状态推进由 AwayOut/Agent 内部完成，不需要你执行脚本。",
+        "",
+    ])
+    lines.extend(_tester_input_section())
+    return {
+        "format": "markdown",
+        "must_show_verbatim": True,
+        "copy_target": "prompt_block_only",
+        "input_mode": "simple_or_advanced_blocks",
+        "prompt": value,
+        "markers": {"event": EVENT_MARKER, "operator": OPERATOR_MARKER, "response": RESPONSE_MARKER},
+        "latest_feedback": feedback_text or None,
+        "latest_event": event_text or None,
+        "rendered_text": "\n".join(lines),
+    }
+
+
 def render_pair_target_interaction(
     action: dict,
     latest_feedback: dict | None = None,
