@@ -26,7 +26,8 @@ awayout-security/
 ├── doctor.py
 ├── common/
 │   ├── store.py
-│   └── presenter.py
+│   ├── presenter.py
+│   └── scoring.py
 └── algorithms/
     ├── pair/
     │   ├── SKILL.md
@@ -39,7 +40,7 @@ awayout-security/
         └── controller.py
 ```
 
-Do not copy only `SKILL.md`; the controllers, API, presenter and store are part of the skill runtime.
+Do not copy only `SKILL.md`; the controllers, API, presenter, scoring helper and store are part of the skill runtime.
 
 Do not mix files from different revisions.
 
@@ -64,8 +65,9 @@ The doctor checks:
 - required Agent Mode files
 - PAIR/TAP/DrAttack imports
 - controller startup
-- core deterministic behavior checks
-- PAIR user-facing presentation template
+- internal-only/user-facing presentation boundaries
+- anchored scoring contract
+- sequential PAIR/TAP/DrAttack user interactions
 - session read/write persistence
 ```
 
