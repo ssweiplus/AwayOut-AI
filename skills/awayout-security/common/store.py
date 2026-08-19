@@ -44,6 +44,7 @@ class AgentSessionStore:
         if not isinstance(runtime, dict):
             runtime = {}
         runtime.setdefault("feedback", [])
+        runtime.setdefault("operator_events", [])
         runtime.setdefault("metadata", {})
         runtime.setdefault("working_memory", empty_working_memory())
         runtime.setdefault("created_at", self._now())
@@ -79,6 +80,13 @@ class AgentSessionStore:
             "updated_at": runtime.get("updated_at"),
         }, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    def _persist_runtime(self, path: Path, data: dict[str, Any], runtime: dict[str, Any]) -> None:
+        runtime["updated_at"] = self._now()
+        data["_runtime"] = runtime
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        self._write_active(data, runtime)
+        self._archive(data)
+
     def _archive(self, data: dict[str, Any]) -> Path:
         return sync_report(data, self.report_root)
 
@@ -88,7 +96,13 @@ class AgentSessionStore:
             try:
                 runtime = self._runtime(json.loads(path.read_text(encoding="utf-8")))
             except Exception:
-                runtime = {"feedback": [], "metadata": {}, "working_memory": empty_working_memory(), "created_at": self._now()}
+                runtime = {
+                    "feedback": [],
+                    "operator_events": [],
+                    "metadata": {},
+                    "working_memory": empty_working_memory(),
+                    "created_at": self._now(),
+                }
         else:
             runtime = self._runtime({})
         runtime["updated_at"] = self._now()
@@ -140,6 +154,7 @@ class AgentSessionStore:
                     "state": data.get("state"),
                     "updated_at": runtime.get("updated_at"),
                     "feedback_count": len(runtime.get("feedback", [])),
+                    "operator_event_count": len(runtime.get("operator_events", [])),
                     "memory_item_count": len(memory.get("items", [])),
                     "report_dir": str(self.report_root / f"test-report-{data.get('session_id')}") if data.get("session_id") else None,
                 })
@@ -162,27 +177,50 @@ class AgentSessionStore:
             "source_ref": self._current_source_ref(data),
         }
         runtime.setdefault("feedback", []).append(item)
-        runtime["updated_at"] = item["created_at"]
-        data["_runtime"] = runtime
-        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        self._write_active(data, runtime)
-        self._archive(data)
+        self._persist_runtime(path, data, runtime)
         return item
 
     def get_feedback(self, session_id: str) -> list[dict[str, Any]]:
         data = self._read_document(session_id)
         return list(self._runtime(data).get("feedback", []))
 
+    def add_operator_event(
+        self,
+        session_id: str,
+        event_type: str,
+        description: str,
+        timing: str = "unspecified",
+        details: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        value = description.strip()
+        if not value:
+            raise ValueError("operator event description cannot be empty")
+        path = self._path(session_id)
+        data = self._read_document(session_id)
+        runtime = self._runtime(data)
+        item = {
+            "event_type": (event_type or "other").strip() or "other",
+            "description": value,
+            "timing": (timing or "unspecified").strip() or "unspecified",
+            "details": details if isinstance(details, dict) else {},
+            "created_at": self._now(),
+            "state": data.get("state"),
+            "source_ref": self._current_source_ref(data),
+        }
+        runtime.setdefault("operator_events", []).append(item)
+        self._persist_runtime(path, data, runtime)
+        return item
+
+    def get_operator_events(self, session_id: str) -> list[dict[str, Any]]:
+        data = self._read_document(session_id)
+        return list(self._runtime(data).get("operator_events", []))
+
     def add_memory_update(self, session_id: str, update: dict[str, Any]) -> dict[str, Any]:
         path = self._path(session_id)
         data = self._read_document(session_id)
         runtime = self._runtime(data)
         memory = apply_memory_update(runtime, update)
-        runtime["updated_at"] = self._now()
-        data["_runtime"] = runtime
-        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        self._write_active(data, runtime)
-        self._archive(data)
+        self._persist_runtime(path, data, runtime)
         return memory
 
     def get_memory_context(self, session_id: str) -> dict[str, Any]:
@@ -196,9 +234,5 @@ class AgentSessionStore:
         for key, value in values.items():
             if value is not None and str(value).strip():
                 metadata[key] = value
-        runtime["updated_at"] = self._now()
-        data["_runtime"] = runtime
-        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        self._write_active(data, runtime)
-        self._archive(data)
+        self._persist_runtime(path, data, runtime)
         return metadata
