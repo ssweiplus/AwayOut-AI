@@ -7,7 +7,6 @@ EVENT_MARKER = "[[AWAYOUT:EVENT]]"
 OPERATOR_MARKER = "[[AWAYOUT:OPERATOR]]"
 RESPONSE_MARKER = "[[AWAYOUT:RESPONSE]]"
 
-_MARKERS = (EVENT_MARKER, OPERATOR_MARKER, RESPONSE_MARKER)
 _MARKER_RE = re.compile(
     r"(?m)^[ \t]*(\[\[AWAYOUT:(?:EVENT|OPERATOR|RESPONSE)\]\])[ \t]*$"
 )
@@ -33,58 +32,55 @@ def _event_type(description: str) -> str:
 
 
 def parse_user_submission(text: str) -> dict[str, Any]:
-    """Parse simple target-response input or advanced multi-block input.
-
-    Simple mode: no AwayOut markers => entire message is the target response.
-    Advanced mode: one or more explicit EVENT / OPERATOR / RESPONSE blocks.
-    """
+    """Parse simple response input or advanced EVENT/OPERATOR/RESPONSE blocks."""
     raw = str(text or "")
     if not raw.strip():
         raise ValueError("user submission cannot be empty")
 
     matches = list(_MARKER_RE.finditer(raw))
     if not matches:
-        return {
-            "mode": "simple",
-            "response": raw.strip(),
-            "events": [],
-            "comments": [],
-        }
+        return {"mode": "simple", "response": raw.strip(), "events": [], "comments": []}
 
-    preamble = raw[: matches[0].start()].strip()
-    if preamble:
+    if raw[: matches[0].start()].strip():
         raise ValueError(
             "advanced AwayOut input cannot contain unlabelled text before the first block; "
             "put the target response under [[AWAYOUT:RESPONSE]]"
         )
 
-    blocks: list[tuple[str, str]] = []
+    blocks: list[dict[str, Any]] = []
     for index, match in enumerate(matches):
         marker = match.group(1)
         end = matches[index + 1].start() if index + 1 < len(matches) else len(raw)
         value = raw[match.end() : end].strip()
         if not value:
             raise ValueError(f"empty AwayOut block: {marker}")
-        blocks.append((marker, value))
+        blocks.append({"marker": marker, "value": value, "order": index})
 
-    responses = [value for marker, value in blocks if marker == RESPONSE_MARKER]
-    if len(responses) > 1:
+    response_blocks = [b for b in blocks if b["marker"] == RESPONSE_MARKER]
+    if len(response_blocks) > 1:
         raise ValueError("advanced AwayOut input accepts at most one [[AWAYOUT:RESPONSE]] block")
+    response_order = response_blocks[0]["order"] if response_blocks else None
 
-    events = [
-        {
-            "event_type": _event_type(value),
-            "description": value,
-            "timing": "before_response" if responses else "unspecified",
-        }
-        for marker, value in blocks
-        if marker == EVENT_MARKER
-    ]
-    comments = [value for marker, value in blocks if marker == OPERATOR_MARKER]
+    events = []
+    for block in blocks:
+        if block["marker"] != EVENT_MARKER:
+            continue
+        if response_order is None:
+            timing = "unspecified"
+        elif block["order"] < response_order:
+            timing = "before_response"
+        else:
+            timing = "after_response"
+        events.append({
+            "event_type": _event_type(block["value"]),
+            "description": block["value"],
+            "timing": timing,
+        })
 
+    comments = [b["value"] for b in blocks if b["marker"] == OPERATOR_MARKER]
     return {
         "mode": "advanced",
-        "response": responses[0] if responses else None,
+        "response": response_blocks[0]["value"] if response_blocks else None,
         "events": events,
         "comments": comments,
     }
@@ -103,8 +99,8 @@ def user_input_contract() -> dict[str, Any]:
                 "target_response": RESPONSE_MARKER,
             },
             "rule": (
-                "Use advanced mode only when recording a special tester action and/or operator comment together with the response. "
-                "When any AwayOut marker is used, the target response must be inside [[AWAYOUT:RESPONSE]]."
+                "Use advanced mode only when recording special tester actions and/or operator comments. "
+                "When any AwayOut marker is used and the same message submits a target response, that response must be inside [[AWAYOUT:RESPONSE]]."
             ),
             "event_and_comment_only_do_not_advance": True,
         },
