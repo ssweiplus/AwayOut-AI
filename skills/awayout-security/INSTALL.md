@@ -28,6 +28,7 @@ awayout-security/
 ├── common/
 │   ├── store.py
 │   ├── presenter.py
+│   ├── interaction.py
 │   ├── scoring.py
 │   ├── memory.py
 │   └── report.py
@@ -43,7 +44,7 @@ awayout-security/
         └── controller.py
 ```
 
-Do not copy only `SKILL.md`; controllers, API, presenter, scoring, Working Memory, report archiver and store are part of the runtime.
+Do not copy only `SKILL.md`; controllers, API, presenter, interaction parser, scoring, Working Memory, report archiver and store are part of the runtime.
 
 Do not mix files from different revisions.
 
@@ -79,6 +80,31 @@ python api.py resume
 
 Otherwise follow `SKILL.md` to collect the objective and choose an algorithm.
 
+## Human target-response input
+
+Preferred entrypoint:
+
+```bash
+python api.py submit-user-input <session_id> --message-file user-input.txt
+```
+
+Normal case: `user-input.txt` contains only the complete target-system response, with no marker.
+
+When special tester actions or operator comments must be recorded together with the response, use the optional blocks documented by the presenter and `SKILL.md`:
+
+```text
+[[AWAYOUT:EVENT]]
+...
+
+[[AWAYOUT:OPERATOR]]
+...
+
+[[AWAYOUT:RESPONSE]]
+...
+```
+
+Do not manually split these blocks in the host Agent; `common/interaction.py` owns parsing.
+
 ## Runtime data
 
 Execution state:
@@ -93,15 +119,18 @@ Permanent test archive (sibling of the store directory when using the default st
 test-report-S-xxxxxxxxxx/
 ```
 
-The report directory is refreshed on session saves and runtime metadata/memory updates. Keep it for review/audit even if the session later ends or is discarded.
+The report directory is refreshed on session saves and runtime metadata/memory/operator updates. Keep it for review/audit even if the session later ends or is discarded.
 
-Working Memory is stored inside each session document under:
+Runtime auxiliary data is stored under `_runtime`, including:
 
 ```text
-_runtime.working_memory
+working_memory
+feedback
+operator_events
+metadata
 ```
 
-It is auxiliary context only. Full raw Prompt/Response history remains in the controller/session and `test-report-*/RESPONSES/`.
+These do not replace full raw Prompt/Response history.
 
 ## Working Memory commands
 
@@ -163,6 +192,10 @@ python api.py get-state <session_id>
 
 Perform only the returned action.
 
+### Tester input is rejected
+
+If no AwayOut marker is needed, paste the target response directly. If any `[[AWAYOUT:*]]` marker is used and the same message also contains a target response, put that response under `[[AWAYOUT:RESPONSE]]`. Do not leave unlabelled text before the first advanced-mode block.
+
 ### Report looks incomplete
 
 Check the matching session JSON first. The archiver never invents missing raw content. If a Prompt/response/score was never persisted, the report cannot reconstruct it from chat history.
@@ -172,6 +205,7 @@ Check the matching session JSON first. The archiver never invents missing raw co
 Prefer file-based arguments such as:
 
 ```text
+--message-file
 --data-file
 --prompt-file
 --response-file
