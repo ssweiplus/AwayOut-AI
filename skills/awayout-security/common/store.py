@@ -64,6 +64,8 @@ class AgentSessionStore:
             index = int(data.get("current_response_index", 0))
             if 0 <= index < len(current_ids):
                 return str(current_ids[index])
+        if algorithm in {"DRATTACK", "DR_ATTACK"} and state == "WAIT_BASELINE_RESPONSE":
+            return "baseline"
         if algorithm in {"DRATTACK", "DR_ATTACK"} and state == "WAIT_STRATEGY_RESPONSES":
             nodes = [n for n in data.get("strategy_nodes", []) if isinstance(n, dict)]
             index = int(data.get("current_strategy_index", 0))
