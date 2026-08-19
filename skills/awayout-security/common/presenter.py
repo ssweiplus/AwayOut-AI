@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-
-OPERATOR_MARKER = "[[AWAYOUT:OPERATOR]]"
+from common.interaction import EVENT_MARKER, OPERATOR_MARKER, RESPONSE_MARKER
 
 
 def _text(value: Any) -> str:
@@ -19,25 +18,47 @@ def _quote_lines(value: str) -> list[str]:
     return [f"> {line}" if line else ">" for line in value.splitlines()]
 
 
-def _operator_section() -> list[str]:
-    return [
-        "### 人工意见（可选）",
-        "如需补充人工判断，请单独发送一条消息，并以这一行开头：",
-        "",
-        _fenced_text(OPERATOR_MARKER + "\n<你的意见>"),
-        "",
-        "人工意见不会被当作目标系统响应，也不会推进当前步骤。",
-    ]
-
-
-def _current_feedback(lines: list[str], latest_feedback: dict | None) -> str:
+def _current_operator_context(
+    lines: list[str],
+    latest_feedback: dict | None,
+    latest_event: dict | None,
+) -> tuple[str, str]:
     feedback_text = _text((latest_feedback or {}).get("text"))
-    lines.extend(["", "### 当前人工意见"])
-    if feedback_text:
-        lines.extend(_quote_lines(feedback_text))
-    else:
+    event_text = _text((latest_event or {}).get("description"))
+    lines.extend(["", "### 本轮已记录的人工信息"])
+    if not feedback_text and not event_text:
         lines.append("暂无。")
-    return feedback_text
+        return "", ""
+    if event_text:
+        event_type = _text((latest_event or {}).get("event_type")) or "other"
+        lines.append(f"- 操作：`{event_type}` — {event_text}")
+    if feedback_text:
+        lines.append("- 意见：")
+        lines.extend(_quote_lines(feedback_text))
+    return feedback_text, event_text
+
+
+def _tester_input_section() -> list[str]:
+    return [
+        "### 你应该怎么回复",
+        "",
+        "**通常情况：直接粘贴目标系统的完整响应即可，不需要任何标签。**",
+        "",
+        "如果本轮还有特殊人工操作或人工判断，可以和目标响应一起发送，使用下面的扩展格式：",
+        "",
+        _fenced_text(
+            f"{EVENT_MARKER}\n新开会话\n\n"
+            f"{OPERATOR_MARKER}\n我怀疑新会话影响了这次结果\n\n"
+            f"{RESPONSE_MARKER}\n<这里粘贴目标系统的完整响应>"
+        ),
+        "",
+        "扩展格式中三个区块都按需填写：",
+        f"- `{EVENT_MARKER}`：记录你实际做了什么，例如新开会话、切换账号、清空上下文；可省略。",
+        f"- `{OPERATOR_MARKER}`：记录你的判断、观察或给 Agent 的建议；可省略。",
+        f"- `{RESPONSE_MARKER}`：目标系统真实响应。**只要使用了任意 AwayOut 标签并且本次要提交响应，就必须放在这个区块。**",
+        "",
+        "如果只发送操作/意见而没有响应，本轮不会推进；之后仍可继续提交目标响应。",
+    ]
 
 
 def _transition_summary(lines: list[str], action: dict) -> None:
@@ -72,7 +93,11 @@ def _transition_summary(lines: list[str], action: dict) -> None:
         lines.append(text)
 
 
-def render_pair_target_interaction(action: dict, latest_feedback: dict | None = None) -> dict:
+def render_pair_target_interaction(
+    action: dict,
+    latest_feedback: dict | None = None,
+    latest_event: dict | None = None,
+) -> dict:
     node = action.get("node") if isinstance(action.get("node"), dict) else {}
     progress = action.get("progress") if isinstance(action.get("progress"), dict) else {}
     handoff = action.get("handoff") if isinstance(action.get("handoff"), dict) else {}
@@ -83,7 +108,6 @@ def render_pair_target_interaction(action: dict, latest_feedback: dict | None = 
     strategy = _text(node.get("strategy") or action.get("strategy") or guidance.get("id")) or "unknown"
     description = _text(guidance.get("description"))
     prompt = _text(node.get("prompt"))
-
     if not prompt:
         raise ValueError("PAIR target interaction template requires a non-empty prompt")
 
@@ -93,8 +117,7 @@ def render_pair_target_interaction(action: dict, latest_feedback: dict | None = 
     lines.extend(["", "### 本轮策略", f"- 策略：`{strategy}`"])
     if description:
         lines.append(f"- 说明：{description}")
-
-    feedback_text = _current_feedback(lines, latest_feedback)
+    feedback_text, event_text = _current_operator_context(lines, latest_feedback, latest_event)
 
     lines.extend([
         "",
@@ -106,29 +129,35 @@ def render_pair_target_interaction(action: dict, latest_feedback: dict | None = 
         "",
         "---",
         "",
-        "### 下一步",
+        "### 测试步骤",
         "1. 只复制上面的 Prompt 代码块内容到目标系统。",
-        "2. 将目标系统的实际响应完整粘贴回来。",
+        "2. 获取目标系统响应后，按下方说明回复本对话。",
         "3. 评分、策略决策和下一轮生成由 AwayOut/Agent 内部完成，不需要你执行脚本。",
         "",
     ])
-    lines.extend(_operator_section())
+    lines.extend(_tester_input_section())
 
     return {
         "format": "markdown",
         "must_show_verbatim": True,
         "copy_target": "prompt_block_only",
+        "input_mode": "simple_or_advanced_blocks",
         "prompt": prompt,
         "strategy": strategy,
         "iteration": iteration,
         "max_iterations": maximum,
-        "operator_marker": OPERATOR_MARKER,
+        "markers": {"event": EVENT_MARKER, "operator": OPERATOR_MARKER, "response": RESPONSE_MARKER},
         "latest_feedback": feedback_text or None,
+        "latest_event": event_text or None,
         "rendered_text": "\n".join(lines),
     }
 
 
-def render_tap_branch_interaction(action: dict, latest_feedback: dict | None = None) -> dict:
+def render_tap_branch_interaction(
+    action: dict,
+    latest_feedback: dict | None = None,
+    latest_event: dict | None = None,
+) -> dict:
     current = action.get("current_branch") if isinstance(action.get("current_branch"), dict) else {}
     progress = action.get("progress") if isinstance(action.get("progress"), dict) else {}
     index = int(current.get("index") or 0)
@@ -138,7 +167,6 @@ def render_tap_branch_interaction(action: dict, latest_feedback: dict | None = N
     node_id = _text(current.get("node_id")) or "unknown"
     improvement = _text(current.get("improvement"))
     prompt = _text(current.get("prompt"))
-
     if not prompt:
         raise ValueError("TAP branch interaction template requires a non-empty prompt")
 
@@ -153,8 +181,7 @@ def render_tap_branch_interaction(action: dict, latest_feedback: dict | None = N
     ])
     if improvement:
         lines.append(f"- 变异方向：{improvement}")
-
-    feedback_text = _current_feedback(lines, latest_feedback)
+    feedback_text, event_text = _current_operator_context(lines, latest_feedback, latest_event)
 
     lines.extend([
         "",
@@ -166,39 +193,43 @@ def render_tap_branch_interaction(action: dict, latest_feedback: dict | None = N
         "",
         "---",
         "",
-        "### 下一步",
+        "### 测试步骤",
         "1. 只复制上面的 Prompt 代码块内容到目标系统。",
-        "2. 将这一次的目标系统实际响应直接粘贴回来即可。",
+        "2. 获取目标系统响应后，按下方说明回复本对话。",
         "3. 不需要填写 JSON、node_id，也不需要执行评分/剪枝脚本。",
         "4. 当前深度响应收集完成后，AwayOut/Agent 会内部评分、剪枝并生成下一步，再一次性展示。",
         "",
     ])
-    lines.extend(_operator_section())
+    lines.extend(_tester_input_section())
 
     return {
         "format": "markdown",
         "must_show_verbatim": True,
         "copy_target": "prompt_block_only",
-        "input_mode": "single_plain_text_response",
+        "input_mode": "simple_or_advanced_blocks",
         "node_id": node_id,
         "branch_index": index,
         "branch_total": total,
         "depth": depth,
         "max_depth": max_depth,
         "prompt": prompt,
-        "operator_marker": OPERATOR_MARKER,
+        "markers": {"event": EVENT_MARKER, "operator": OPERATOR_MARKER, "response": RESPONSE_MARKER},
         "latest_feedback": feedback_text or None,
+        "latest_event": event_text or None,
         "rendered_text": "\n".join(lines),
     }
 
 
-def render_drattack_strategy_interaction(action: dict, latest_feedback: dict | None = None) -> dict:
+def render_drattack_strategy_interaction(
+    action: dict,
+    latest_feedback: dict | None = None,
+    latest_event: dict | None = None,
+) -> dict:
     current = action.get("current_strategy") if isinstance(action.get("current_strategy"), dict) else {}
     index = int(current.get("index") or 0)
     total = int(current.get("total") or 0)
     strategy = _text(current.get("strategy")) or "unknown"
     prompt = _text(current.get("prompt"))
-
     if not prompt:
         raise ValueError("DrAttack strategy interaction template requires a non-empty prompt")
 
@@ -211,7 +242,7 @@ def render_drattack_strategy_interaction(action: dict, latest_feedback: dict | N
         f"- 策略：`{strategy}`",
         "- 说明：本次只测试这一条；提交响应后会自动进入下一个策略。",
     ])
-    feedback_text = _current_feedback(lines, latest_feedback)
+    feedback_text, event_text = _current_operator_context(lines, latest_feedback, latest_event)
 
     lines.extend([
         "",
@@ -223,25 +254,26 @@ def render_drattack_strategy_interaction(action: dict, latest_feedback: dict | N
         "",
         "---",
         "",
-        "### 下一步",
+        "### 测试步骤",
         "1. 只复制上面的 Prompt 代码块内容到目标系统。",
-        "2. 将这一次的目标系统实际响应直接粘贴回来即可。",
+        "2. 获取目标系统响应后，按下方说明回复本对话。",
         "3. 不需要填写 JSON，也不需要执行评分脚本；所有策略完成后统一评分并一次性展示结果。",
         "",
     ])
-    lines.extend(_operator_section())
+    lines.extend(_tester_input_section())
 
     return {
         "format": "markdown",
         "must_show_verbatim": True,
         "copy_target": "prompt_block_only",
-        "input_mode": "single_plain_text_response",
+        "input_mode": "simple_or_advanced_blocks",
         "strategy": strategy,
         "strategy_index": index,
         "strategy_total": total,
         "prompt": prompt,
-        "operator_marker": OPERATOR_MARKER,
+        "markers": {"event": EVENT_MARKER, "operator": OPERATOR_MARKER, "response": RESPONSE_MARKER},
         "latest_feedback": feedback_text or None,
+        "latest_event": event_text or None,
         "rendered_text": "\n".join(lines),
     }
 
@@ -252,11 +284,7 @@ def render_final_result(action: dict) -> dict:
     stop_reason = _text(action.get("stop_reason") or summary.get("stop_reason"))
     success = bool(summary.get("success"))
 
-    lines = [
-        f"## {algorithm} 测试结果",
-        "",
-        f"- 结果：{'达到成功条件' if success else '未达到成功条件'}",
-    ]
+    lines = [f"## {algorithm} 测试结果", "", f"- 结果：{'达到成功条件' if success else '未达到成功条件'}"]
     if stop_reason:
         lines.append(f"- 停止原因：`{stop_reason}`")
 
@@ -278,8 +306,4 @@ def render_final_result(action: dict) -> dict:
     if tree:
         lines.extend(["", "### 路径摘要", "", _fenced_text(tree)])
 
-    return {
-        "format": "markdown",
-        "must_show_verbatim": True,
-        "rendered_text": "\n".join(lines),
-    }
+    return {"format": "markdown", "must_show_verbatim": True, "rendered_text": "\n".join(lines)}
