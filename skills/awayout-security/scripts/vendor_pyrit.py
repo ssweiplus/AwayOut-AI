@@ -9,9 +9,13 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
+import sys
 from pathlib import Path
 
 import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from common.template_guidance import valid_placeholders
 
 UPSTREAM_COMMIT = "695255f6fe299ac7af2876d16fe946f2b7e0aa72"
 RELATIVE_SOURCE = Path("pyrit/datasets/jailbreak/templates")
@@ -90,7 +94,7 @@ def convert(source: Path, dest: Path, expected_revision: str = UPSTREAM_COMMIT) 
                 or raw.get("data_type", "text") != "text"
                 or not isinstance(parameters, list)
                 or any(p not in {"prompt", "objective"} for p in parameters)
-                or "{%" in value or "{#" in value):
+                or not valid_placeholders(value)):
             skipped.append({"source_file": relative.as_posix(), "reason": "incompatible or unsafe template"})
             continue
         category = raw.get("category")
