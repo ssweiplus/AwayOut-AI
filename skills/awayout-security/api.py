@@ -802,9 +802,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Request IDs are optional for legacy callers but recommended for every
     # host-agent mutation, particularly human responses and branch generation.
-    for parser in (user_input, candidate, response, tap_response, dr_response,
-                   judgement, result, feedback, event, extension):
-        parser.add_argument("--request-id", default=None)
+    for submit_parser in (user_input, candidate, response, tap_response, dr_response,
+                          judgement, result, feedback, event, extension):
+        submit_parser.add_argument("--request-id", default=None)
     return parser
 
 
