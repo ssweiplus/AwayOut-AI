@@ -20,5 +20,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install optional importer dependency
         run: python -m pip install pyyaml
+      - name: Run Agent Mode doctor
+        run: python skills/awayout-security/doctor.py
       - name: Run Agent Mode tests
         run: python -m unittest discover -s skills/awayout-security/tests -p "test_*.py" -v
