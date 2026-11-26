@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from algorithms.drattack.controller import DrAttackController
 from algorithms.pair.controller import PairController
@@ -20,12 +23,60 @@ class AgentSessionStore:
         self.directory.mkdir(parents=True, exist_ok=True)
         self.active_path = self.directory / "active.json"
         self.report_root = self.directory.parent
+        self._pending_request: dict[str, Any] | None = None
 
     def _path(self, session_id: str) -> Path:
         safe = "".join(ch for ch in session_id if ch.isalnum() or ch in {"-", "_"})
         if not safe:
             raise ValueError("invalid session_id")
         return self.directory / f"{safe}.json"
+
+    @contextmanager
+    def session_lock(self, session_id: str):
+        """Cross-process lock released by the OS after a process crash.
+
+        Use the same lock around the replay check and the state mutation.
+        """
+        path = self._path(session_id).with_suffix(".lock")
+        with path.open("a+b") as handle:
+            handle.seek(0)
+            if os.name == "nt":
+                import msvcrt
+                msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+                try:
+                    yield
+                finally:
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+    def get_request(self, session_id: str, request_id: str) -> dict[str, Any] | None:
+        runtime = self._read_document(session_id).get("_runtime", {})
+        return next((entry for entry in runtime.get("submitted_requests", [])
+                     if isinstance(entry, dict) and entry.get("request_id") == request_id), None)
+
+    def set_pending_request(self, receipt: dict[str, Any] | None) -> None:
+        self._pending_request = receipt
+
+    def _attach_request(self, runtime: dict[str, Any]) -> None:
+        if self._pending_request is not None:
+            runtime.setdefault("submitted_requests", []).append({
+                **self._pending_request, "recorded_at": self._now()
+            })
+
+    def _atomic_json(self, path: Path, data: dict[str, Any]) -> None:
+        temp = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+        try:
+            temp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            os.replace(temp, path)
+        finally:
+            temp.unlink(missing_ok=True)
 
     def _read_document(self, session_id: str) -> dict[str, Any]:
         path = self._path(session_id)
@@ -74,18 +125,19 @@ class AgentSessionStore:
         return None
 
     def _write_active(self, data: dict[str, Any], runtime: dict[str, Any]) -> None:
-        self.active_path.write_text(json.dumps({
+        self._atomic_json(self.active_path, {
             "session_id": data.get("session_id"),
             "algorithm": data.get("algorithm"),
             "objective": data.get("objective"),
             "state": data.get("state"),
             "updated_at": runtime.get("updated_at"),
-        }, ensure_ascii=False, indent=2), encoding="utf-8")
+        })
 
     def _persist_runtime(self, path: Path, data: dict[str, Any], runtime: dict[str, Any]) -> None:
         runtime["updated_at"] = self._now()
+        self._attach_request(runtime)
         data["_runtime"] = runtime
-        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        self._atomic_json(path, data)
         self._write_active(data, runtime)
         self._archive(data)
 
@@ -95,21 +147,34 @@ class AgentSessionStore:
     def save(self, controller: Controller, *,
              template_uses: list[tuple[str, dict[str, Any]]] | None = None,
              memory_update: dict[str, Any] | None = None,
-             template_config: dict[str, Any] | None = None) -> Path:
+             template_config: dict[str, Any] | None = None,
+             feedback_texts: list[str] | None = None,
+             operator_events: list[dict[str, Any]] | None = None) -> Path:
         path = self._path(controller.session_id)
-        if path.is_file():
-            try:
-                runtime = self._runtime(json.loads(path.read_text(encoding="utf-8")))
-            except Exception:
-                runtime = {
-                    "feedback": [],
-                    "operator_events": [],
-                    "metadata": {},
-                    "working_memory": empty_working_memory(),
-                    "created_at": self._now(),
-                }
-        else:
-            runtime = self._runtime({})
+        previous = self._read_document(controller.session_id) if path.is_file() else {}
+        runtime = self._runtime(previous)
+        previous_state = previous.get("state")
+        previous_ref = self._current_source_ref(previous)
+        for comment in feedback_texts or []:
+            value = str(comment).strip()
+            if not value:
+                raise ValueError("feedback cannot be empty")
+            runtime.setdefault("feedback", []).append({
+                "text": value, "created_at": self._now(),
+                "state": previous_state, "source_ref": previous_ref,
+            })
+        for event in operator_events or []:
+            value = str(event.get("description", "")).strip()
+            if not value:
+                raise ValueError("operator event description cannot be empty")
+            runtime.setdefault("operator_events", []).append({
+                "event_type": str(event.get("event_type", "other")).strip() or "other",
+                "description": value,
+                "timing": str(event.get("timing", "unspecified")).strip() or "unspecified",
+                "details": event.get("details") if isinstance(event.get("details"), dict) else {},
+                "created_at": self._now(),
+                "state": previous_state, "source_ref": previous_ref,
+            })
         if memory_update is not None:
             apply_memory_update(runtime, memory_update)
         if template_config is not None:
@@ -124,12 +189,8 @@ class AgentSessionStore:
                 recorded.append({
                     "source_ref": source_ref, **use, "recorded_at": self._now(),
                 })
-        runtime["updated_at"] = self._now()
         data = controller.to_dict()
-        data["_runtime"] = runtime
-        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        self._write_active(data, runtime)
-        self._archive(data)
+        self._persist_runtime(path, data, runtime)
         return path
 
     def load(self, session_id: str) -> Controller:
@@ -150,6 +211,11 @@ class AgentSessionStore:
         if not isinstance(data, dict) or not data.get("session_id"):
             return None
         return data
+
+    def activate(self, session_id: str) -> Controller:
+        data = self._read_document(session_id)
+        self._write_active(data, self._runtime(data))
+        return self.load(session_id)
 
     def load_active(self) -> Controller:
         active = self.get_active()
