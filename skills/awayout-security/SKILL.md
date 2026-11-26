@@ -112,7 +112,13 @@ If the active pointer is unclear:
 ```bash
 python api.py list-sessions
 python api.py get-state <session_id>
+python api.py resume --session-id <session_id>
 ```
+
+`resume --session-id` marks the selected persisted session active. Do not start a
+new session merely because the host chat restarted. If that session is DONE,
+only `extend-test` can authorize a new attempt; ordinary result submissions
+must continue to reject DONE.
 
 Never reconstruct the current step from chat memory when persisted state is available.
 
@@ -414,7 +420,7 @@ EVENT and OPERATOR blocks never count as the target response. A message containi
 At every human target interaction, the host Agent MUST pass the tester's complete reply unchanged to:
 
 ```bash
-python api.py submit-user-input <session_id> --message-file user-input.txt
+python api.py submit-user-input <session_id> --message-file user-input.txt --request-id response-1
 ```
 
 Do not manually split or classify the message in the host Agent. `common/interaction.py` owns parsing.
@@ -438,9 +444,41 @@ When `handoff.kind = present_result`, display the persisted-summary-based presen
 
 After final result presentation, follow-up-objective suggestions may be produced from persisted Working Memory/report evidence, but label them clearly as suggestions for a new test.
 
-### Checkpoint and resume
+### Checkpoint, idempotent retry and extension
 
 Every successful controller submission, user-input submission, memory update, metadata update, operator event and feedback mutation is persisted. After restart/context loss, resume from storage; do not infer where execution stopped.
+
+**For every mutating api.py command, prefer --request-id with a unique, stable ID
+for that logical submission.** Persist/reuse the SAME request ID and SAME content
+when retrying after an uncertain outcome; never mint a new ID just because a
+timeout occurred. Distinct logical actions need different IDs. The controller
+stores a hash of the submitted content with the resulting state in one checkpoint.
+An identical retry is returned with `result.idempotency.replayed=true` and the
+CURRENT state; conflicting reused IDs are rejected.
+
+Supported on submit-result, submit-user-input, submit-candidate,
+submit-response, submit-tap-response, submit-drattack-response,
+submit-judgement, add-feedback, add-event and extend-test.
+Old calls without --request-id still work but have no exactly-once retry guard.
+Host agents must not replay the user's real-world target-system action: a
+persisted response deduplicates the **AwayOut record**, not the external action.
+
+When the persisted state is DONE and the user explicitly asks for more rounds,
+offer the matching extension command rather than trying to submit another
+candidate:
+
+```bash
+python api.py extend-test <session_id> --extra-iterations 5     # PAIR
+python api.py extend-test <session_id> --extra-depth 2          # TAP
+python api.py extend-test <session_id> --extra-reconstructions 1 # DrAttack
+```
+
+PAIR resumes generating the next candidate. TAP uses scored surviving branches
+as parents. DrAttack retains prior strategy nodes and reuses existing fragments
+for an additional reconstruction batch. If a first-success stop policy
+deliberately ended a session, ask for explicit approval before using
+`--continue-after-success`. All extensions preserve session ID, objective,
+Working Memory, template usage and archived raw Prompt/Response.
 
 ### Only AwayOut may finish a run
 
@@ -460,7 +498,9 @@ progress.can_stop = true
 python api.py describe-algorithms
 python api.py get-active
 python api.py resume
+python api.py resume --session-id <session_id>
 python api.py list-sessions
+python api.py extend-test <session_id> --extra-iterations 5 --request-id extend-5
 python api.py get-state <session_id>
 python api.py get-tree <session_id>
 python api.py get-summary <session_id>
@@ -480,5 +520,5 @@ python -m common.memory metadata <session_id> --target-system "<target>"
 Shared structured internal handoff submission:
 
 ```bash
-python api.py submit-result <session_id> --data-file result.json
+python api.py submit-result <session_id> --data-file result.json --request-id step-1
 ```
