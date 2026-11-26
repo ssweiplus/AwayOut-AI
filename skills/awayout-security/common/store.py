@@ -92,7 +92,10 @@ class AgentSessionStore:
     def _archive(self, data: dict[str, Any]) -> Path:
         return sync_report(data, self.report_root)
 
-    def save(self, controller: Controller) -> Path:
+    def save(self, controller: Controller, *,
+             template_uses: list[tuple[str, dict[str, Any]]] | None = None,
+             memory_update: dict[str, Any] | None = None,
+             template_config: dict[str, Any] | None = None) -> Path:
         path = self._path(controller.session_id)
         if path.is_file():
             try:
@@ -107,6 +110,20 @@ class AgentSessionStore:
                 }
         else:
             runtime = self._runtime({})
+        if memory_update is not None:
+            apply_memory_update(runtime, memory_update)
+        if template_config is not None:
+            runtime["template_config"] = dict(template_config)
+        if template_uses:
+            recorded = runtime.setdefault("template_uses", [])
+            for source_ref, use in template_uses:
+                if not source_ref:
+                    raise ValueError("template use requires a source reference")
+                recorded[:] = [item for item in recorded
+                               if item.get("source_ref") != source_ref]
+                recorded.append({
+                    "source_ref": source_ref, **use, "recorded_at": self._now(),
+                })
         runtime["updated_at"] = self._now()
         data = controller.to_dict()
         data["_runtime"] = runtime
