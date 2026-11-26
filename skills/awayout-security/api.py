@@ -883,7 +883,7 @@ def main() -> int:
     try:
         if args.command in MUTATION_COMMANDS:
             with store.session_lock(args.session_id):
-                if args.request_id:
+                if args.request_id is not None:
                     if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}", args.request_id):
                         raise ValueError("invalid request-id: use 1-128 alphanumeric/_.:- characters")
                     digest = request_digest(args)
