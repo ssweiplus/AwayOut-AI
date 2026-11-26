@@ -203,6 +203,14 @@ python api.py submit-candidate <session_id> --prompt-file candidate.txt --strate
 
 If `progress.stop_policy=exhaust_budget`, continue while `progress.can_stop=false` even after an earlier success.
 
+Optional template integration for candidate generation: inspect handoff.template_guidance and
+choose the actual template action (reference/rewrite/combine/skip). To preserve this
+decision, submit an object through submit-result with prompt, optional strategy,
+and template_use, e.g. {"action":"reference","template_ids":["pyrit:<id>"],"experience_ids":[]}.
+Alternatively pass --template-action, --template-ids and --experience-ids with
+submit-candidate. Referenced high-scoring nodes are evidence, not a mandate to
+repeat their wording. See ../../TEMPLATES.md.
+
 ### `WAIT_TARGET_RESPONSE` / `human_target_interaction`
 
 PAIR target interaction is fully presenter-owned.

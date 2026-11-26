@@ -23,10 +23,12 @@ awayout-security/
 ├── SKILL.md
 ├── INSTALL.md
 ├── REPORTING.md
+├── TEMPLATES.md
 ├── api.py
 ├── doctor.py
 ├── common/
 │   ├── store.py
+│   ├── template_guidance.py
 │   ├── presenter.py
 │   ├── interaction.py
 │   ├── scoring.py
@@ -42,6 +44,13 @@ awayout-security/
     └── drattack/
         ├── SKILL.md
         └── controller.py
+└── resources/
+    └── pyrit/
+        ├── core-root.json
+        ├── core-arth.json
+        ├── core-pliny.json
+        ├── manifest.json
+        └── LICENSE
 ```
 
 Do not copy only `SKILL.md`; controllers, API, presenter, interaction parser, scoring, Working Memory, report archiver and store are part of the runtime.
@@ -62,7 +71,7 @@ Expected final line:
 Agent Mode is ready. No external LLM provider is required.
 ```
 
-The doctor checks Python/version, required files, controller startup, user-facing interaction contracts, internal-only boundaries, scoring anchors, Working Memory compatibility/persistence, report creation and session restore.
+The doctor checks Python/version, required files, the bundled 151 PyRIT prompt references and safe placeholders, controller startup, user-facing interaction contracts, internal-only boundaries, scoring anchors, Working Memory compatibility/persistence, report creation and session restore.
 
 ## First run / recovery
 
@@ -128,6 +137,8 @@ working_memory
 feedback
 operator_events
 metadata
+template_config
+template_uses
 ```
 
 These do not replace full raw Prompt/Response history.

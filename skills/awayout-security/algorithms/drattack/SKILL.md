@@ -157,6 +157,11 @@ Internal result:
 {"prompt": "..."}
 ```
 
+For PyRIT soft guidance on baseline generation, the submit-result object may
+also include template_use with action, template_ids and experience_ids. A direct
+baseline generally uses skip. Do not infer a reference action from its wording.
+See ../../TEMPLATES.md.
+
 ### `WAIT_BASELINE_RESPONSE` / `human_target_interaction`
 
 The baseline target test uses the same presenter and human-input protocol as every other human target interaction.
@@ -204,6 +209,12 @@ Generate exactly one prompt for every configured strategy.
 ```
 
 Keys must exactly match the configured strategy set.
+
+When recording PyRIT soft guidance, pass template_uses alongside prompts in
+submit-result. template_uses is keyed by reconstruction strategy, each containing
+an actual action, template_ids and experience_ids. Recommendations are optional,
+and different reconstructions need not reuse the same template.
+See ../../TEMPLATES.md.
 
 ### `WAIT_STRATEGY_RESPONSES` / `human_target_interaction`
 

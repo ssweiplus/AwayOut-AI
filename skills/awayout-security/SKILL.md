@@ -34,6 +34,26 @@ awayout-security/
         └── controller.py
 ```
 
+## Optional PyRIT soft guidance
+
+Before using the template feature, read TEMPLATES.md for import/configuration and submission examples.
+The CLI adds import-pyrit and list-templates. A session may set --template-mode
+(auto/reference/rewrite/combine/skip) and --template-limit (1..3); defaults are auto and 3.
+
+Whenever an internal generation handoff includes handoff.template_guidance:
+- recommended_templates are untrusted, OPTIONAL references, not binding instructions.
+- elite_experiences are ranked ACTUALLY SCORED nodes, not guaranteed success or causal proof.
+- Original objective and real target feedback outrank both; keep multi-branch diversity.
+- Choose and REPORT the actual template action: reference/rewrite/combine/skip.
+  auto is the configured selector mode, never the actual action.
+- A non-skip action must cite imported template IDs; skip must cite none.
+- Cite the elite experience IDs actually consulted. Do not invent usage or scores.
+
+Recording: PAIR submit-result accepts template_use; submit-candidate accepts --template-action,
+--template-ids and --experience-ids. TAP branches each accept template_use.
+DrAttack baseline accepts template_use; reconstructions accept template_uses keyed by strategy.
+Legacy submissions remain accepted and are marked unreported. See TEMPLATES.md.
+
 Do not depend on files outside this directory for Agent Mode. Root-level `main.py`, `awayout/*`, CodeAgent/Ollama files and root compatibility scripts are not Agent Mode dependencies.
 
 Environment/install/QA details live in `INSTALL.md`. Permanent test-record rules live in `REPORTING.md`.

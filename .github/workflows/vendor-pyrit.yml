@@ -1,0 +1,49 @@
+name: Verify pinned PyRIT templates
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout AwayOut
+        uses: actions/checkout@v4
+      - name: Checkout pinned PyRIT source
+        uses: actions/checkout@v4
+        with:
+          repository: microsoft/PyRIT
+          ref: 695255f6fe299ac7af2876d16fe946f2b7e0aa72
+          path: _pyrit_upstream
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install build-only YAML parser
+        run: python -m pip install pyyaml
+      - name: Reproduce bundled catalog in temporary directory
+        run: >-
+          python skills/awayout-security/scripts/vendor_pyrit.py
+          --source _pyrit_upstream
+          --dest _rebuild/pyrit
+      - name: Require reproducible checked-in templates and license
+        run: diff -rq _rebuild/pyrit skills/awayout-security/resources/pyrit
+      - name: Verify catalog and unit tests
+        run: |
+          python -m unittest discover -s skills/awayout-security/tests -p 'test_*.py' -v
+          PYTHONPATH=skills/awayout-security python - <<'PY'
+          import json
+          from pathlib import Path
+          from common.template_guidance import load_templates
+          root = Path('skills/awayout-security/resources/pyrit')
+          manifest = json.loads((root / 'manifest.json').read_text(encoding='utf-8'))
+          assert manifest['total_bundled'] == 151, manifest
+          assert (root / 'LICENSE').is_file()
+          assert len(load_templates('.awayout-agent')) == 151
+          print('Bundled', manifest['total_bundled'], 'templates')
+          PY

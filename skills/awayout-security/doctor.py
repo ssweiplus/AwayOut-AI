@@ -37,7 +37,11 @@ def main() -> int:
     ok("Python", sys.version.split()[0])
 
     required = [
-        "SKILL.md", "INSTALL.md", "REPORTING.md", "api.py", "doctor.py",
+        "SKILL.md", "INSTALL.md", "REPORTING.md", "TEMPLATES.md",
+        "api.py", "doctor.py", "common/template_guidance.py",
+        "resources/pyrit/LICENSE", "resources/pyrit/manifest.json",
+        "resources/pyrit/core-root.json", "resources/pyrit/core-arth.json",
+        "resources/pyrit/core-pliny.json",
         "common/store.py", "common/presenter.py", "common/interaction.py",
         "common/scoring.py", "common/memory.py", "common/report.py",
         "algorithms/pair/SKILL.md", "algorithms/pair/controller.py",
@@ -49,6 +53,18 @@ def main() -> int:
         fail("Skill files", ", ".join(missing))
         return 1
     ok("Skill files", "router + presenter + interaction + scoring + memory + report + 3 algorithms")
+
+    try:
+        from common.template_guidance import load_templates, valid_placeholders
+        catalog = load_templates(SKILL_ROOT / ".doctor-bundled-check")
+        if len(catalog) != 151 or len({entry["id"] for entry in catalog}) != 151:
+            raise RuntimeError(f"expected 151 unique bundled templates, got {len(catalog)}")
+        if not all(valid_placeholders(entry["template"]) for entry in catalog):
+            raise RuntimeError("one or more bundled templates contain unsupported Jinja syntax")
+    except Exception as exc:
+        fail("PyRIT bundled templates", str(exc))
+        return 1
+    ok("PyRIT bundled templates", "151 unique, safe single-slot references")
 
     try:
         from algorithms.pair.controller import PairController
@@ -205,7 +221,10 @@ def main() -> int:
         pair = PairController(objective="score-policy", max_iterations=2)
         pair.submit_candidate("p1")
         pair.submit_response("r1")
-        internal = enrich(pair, AgentSessionStore(tempfile.mkdtemp()), pair.next_action())
+        with tempfile.TemporaryDirectory() as directory:
+            store = AgentSessionStore(str(Path(directory) / ".awayout-agent"))
+            store.save(pair)
+            internal = enrich(pair, store, pair.next_action())
         if internal["handoff"].get("visibility") != "internal":
             raise RuntimeError("scoring is not internal-only")
         anchors = internal.get("rubric", {}).get("anchors", [])

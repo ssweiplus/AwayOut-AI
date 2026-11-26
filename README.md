@@ -166,4 +166,15 @@ Reserved next:
 
 - richer visual attack-tree rendering;
 - optional MCP wrapper;
-- optional curated Seed Prompt library.
+- extended cross-session template benchmarking and broader prompt collections.
+
+
+## Optional PyRIT template guidance (Agent Mode)
+
+AwayOut Agent Mode **bundles pinned PyRIT prompt templates by default** as non-binding references (no separate PyRIT download or runtime dependency required).
+Templates are mapped to preferred AwayOut strategies, while the host Agent may
+reference, rewrite, combine or skip them. Template decisions are recorded per
+candidate/branch and the highest-scored actual test nodes are passed forward as
+optional elite examples. PAIR/TAP/DrAttack scoring and state machines are unchanged.
+
+See [Bundled PyRIT templates and optional imports](skills/awayout-security/TEMPLATES.md).

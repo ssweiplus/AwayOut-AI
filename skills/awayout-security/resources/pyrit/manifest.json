@@ -1,0 +1,67 @@
+{
+  "upstream": "https://github.com/microsoft/PyRIT",
+  "commit": "695255f6fe299ac7af2876d16fe946f2b7e0aa72",
+  "template_root": "pyrit/datasets/jailbreak/templates",
+  "bundled": {
+    "root": 90,
+    "arth": 30,
+    "pliny": 31
+  },
+  "total_bundled": 151,
+  "excluded_by_collection": {
+    "in_the_wild": 488,
+    "multi_parameter": 5
+  },
+  "skipped": [
+    {
+      "source_file": "pliny/alibaba/qwen_2.yaml",
+      "reason": "incompatible or unsafe template"
+    },
+    {
+      "source_file": "pliny/alibaba/qwen_2_5_max.yaml",
+      "reason": "incompatible or unsafe template"
+    },
+    {
+      "source_file": "pliny/apple/siri_chatgpt.yaml",
+      "reason": "incompatible or unsafe template"
+    },
+    {
+      "source_file": "pliny/google/gemini_1_5_pro_experimental_0801.yaml",
+      "reason": "incompatible or unsafe template"
+    },
+    {
+      "source_file": "pliny/google/gemini_2_0_flash_thinking_exp.yaml",
+      "reason": "incompatible or unsafe template"
+    },
+    {
+      "source_file": "pliny/google/gemini_2_0_pro_experimental.yaml",
+      "reason": "incompatible or unsafe template"
+    },
+    {
+      "source_file": "pliny/google/gemini_experimental_1114.yaml",
+      "reason": "incompatible or unsafe template"
+    },
+    {
+      "source_file": "pliny/google/gemini_experimental_1206_flash_2_0.yaml",
+      "reason": "incompatible or unsafe template"
+    },
+    {
+      "source_file": "pliny/nvidia/llama_3_1_nemotron_70b.yaml",
+      "reason": "incompatible or unsafe template"
+    },
+    {
+      "source_file": "pliny/nvidia/nemotron_7_340b.yaml",
+      "reason": "incompatible or unsafe template"
+    },
+    {
+      "source_file": "pliny/openai/chatgpt_tasks.yaml",
+      "reason": "incompatible or unsafe template"
+    }
+  ],
+  "notes": [
+    "Category mappings are suggestions, not verified PyRIT official labels.",
+    "in_the_wild contains third-party community prompts; excluded from curated default library.",
+    "multi_parameter templates are not compatible with one-slot objective substitution.",
+    "Preserve original PyRIT license and source metadata when redistributing."
+  ]
+}
