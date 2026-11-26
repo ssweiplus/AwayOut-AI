@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import re
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -224,6 +225,11 @@ def main() -> int:
                 meta = store.set_metadata(args.session_id, target_system=args.target_system)
                 result = {"success": True, "metadata": meta}
 
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
+        except (OSError, ValueError):
+            pass
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 
