@@ -277,6 +277,24 @@ class PairController:
 
         return payload
 
+    def extend_budget(self, extra_iterations: int, *, continue_after_success: bool = False) -> dict:
+        """Continue the same scored history after exhausting the attempt budget."""
+        if extra_iterations < 1:
+            raise ValueError("extra_iterations must be positive")
+        if self.state == "DONE":
+            if self.stop_reason == "success_threshold_reached":
+                if not continue_after_success:
+                    raise ValueError("session stopped on success; pass --continue-after-success to extend")
+                self.stop_policy = "exhaust_budget"
+            elif self.stop_reason != "max_iterations_reached":
+                raise ValueError(f"session cannot be extended after: {self.stop_reason}")
+            if not all(node.score is not None for node in self.nodes):
+                raise ValueError("cannot extend a session with unfinished scoring")
+            self.state = "NEED_CANDIDATE"
+            self.stop_reason = ""
+        self.max_iterations += extra_iterations
+        return self.next_action()
+
     def submit_candidate(self, prompt: str, strategy: str | None = None) -> dict:
         self._require("NEED_CANDIDATE")
         if not prompt.strip():
