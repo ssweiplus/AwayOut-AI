@@ -2,17 +2,24 @@
 
 本功能属于 Agent Mode（skills/awayout-security），不依赖旧版 awayout/seeds.py，不需要运行 PyRIT 框架。只在有授权的目标系统上使用。
 
-## 1. 导入 PyRIT 提示词模板
+## 1. 内置模板（开箱即用）
 
-在本地获取 PyRIT 仓库后，安装导入器的可选依赖：
-
-    python -m pip install pyyaml
+**默认已随项目内置PyRIT单目标文本模板，无须手动下载或导入，也不需要PyYAML运行时依赖。**
 
     cd skills/awayout-security
-    python api.py --store .awayout-agent import-pyrit --source /path/to/PyRIT/pyrit/datasets/jailbreak/templates
     python api.py --store .awayout-agent list-templates
 
-导入结果保存在 .awayout-agent/templates/pyrit.json，不进入源码库。
+内置文件位于 `resources/pyrit/core-*.json`。来源与版本记录在 `resources/pyrit/manifest.json`，上游MIT许可证文本保存在 `resources/pyrit/LICENSE`。
+
+本次固定PyRIT上游提交 `695255f6fe299ac7af2876d16fe946f2b7e0aa72`，筛选可与单目标参数兼容的常规/Arth Singh/Pliny模板。社区in-the-wild数据集和多参数模板不混入默认库；不兼容的专项模板记录在manifest中。
+
+**可选：用自定义模板库替换默认库。** 只有需要更新或更换模板时才执行：
+
+    python -m pip install pyyaml
+    python api.py --store .awayout-agent import-pyrit --source /path/to/PyRIT/pyrit/datasets/jailbreak/templates
+
+导入结果保存到 `.awayout-agent/templates/pyrit.json`，优先于内置模板。删除该文件即可恢复默认库。
+
 源模板的 name、作者、源链接与源文件位置都会保留。导入仅接受文本型 YAML 和简单的 {{ prompt }} / {{ objective }} 变量，不执行任意 Jinja 表达式。跳过不兼容的模板并报告数量。
 
 注意：PyRIT 的 YAML 文件通常不含一一对应的 8 类官方分类字段。AwayOut 的分类是建议性映射；来源文件没有分类时，少数已知模板使用建议分类，其余标记为 unclassified，不要把推断标签当成官方事实。导入后请检查原始模板来源及许可证。
