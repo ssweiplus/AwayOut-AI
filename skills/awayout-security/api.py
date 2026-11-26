@@ -161,7 +161,7 @@ def _source_ref(controller) -> str | None:
         return node.node_id if node else None
     if isinstance(controller, DrAttackController) and controller.state == "WAIT_STRATEGY_RESPONSES":
         node = controller.current_strategy_node
-        return node.strategy if node else None
+        return (node.node_id or node.strategy) if node else None
     if isinstance(controller, DrAttackController) and controller.state == "WAIT_BASELINE_RESPONSE":
         return "baseline"
     return None
@@ -445,7 +445,7 @@ def _verified_template_use(store: AgentSessionStore, session_id: str, raw: dict 
     known_ids = {item["id"] for item in load_templates(store.directory)}
     current = store.load(session_id)
     scored_ids = {
-        str(getattr(node, "node_id", getattr(node, "strategy", "")))
+        str(getattr(node, "node_id", "") or getattr(node, "strategy", ""))
         for node in [*getattr(current, "nodes", []), *getattr(current, "strategy_nodes", [])]
         if getattr(node, "score", None) is not None
     }
@@ -606,7 +606,7 @@ def cmd_result(args: argparse.Namespace, store: AgentSessionStore) -> int:
                     for strategy, item in raw_uses.items()}
             controller.submit_reconstructions(dict(data.get("prompts", {})))
             pending_template_uses.extend(
-                (strategy, use) for strategy, use in uses.items() if use
+                (controller.strategy_ref(strategy), use) for strategy, use in uses.items() if use
             )
         elif state == "WAIT_STRATEGY_RESPONSES":
             controller.submit_strategy_response(str(data.get("response", "")))
