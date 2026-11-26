@@ -27,7 +27,7 @@ def _node_ref(document: dict[str, Any], node: dict[str, Any]) -> str:
     if algorithm in {"PAIR", "TAP"}:
         return _text(node.get("node_id"))
     if algorithm in {"DRATTACK", "DR_ATTACK"}:
-        return _text(node.get("strategy"))
+        return _text(node.get("node_id")) or _text(node.get("strategy"))
     return ""
 
 
