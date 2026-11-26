@@ -513,8 +513,8 @@ python api.py add-feedback <session_id> --feedback "<comment>"
 python api.py add-event <session_id> --event-type other --description "<tester action>"
 
 python -m common.memory context <session_id>
-python -m common.memory update <session_id> --data-file memory-update.json
-python -m common.memory metadata <session_id> --target-system "<target>"
+python -m common.memory update <session_id> --data-file memory-update.json --request-id memory-001
+python -m common.memory metadata <session_id> --target-system "<target>" --request-id metadata-001
 ```
 
 Shared structured internal handoff submission:
