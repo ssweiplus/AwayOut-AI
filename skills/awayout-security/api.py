@@ -650,6 +650,7 @@ def cmd_extend_test(args: argparse.Namespace, store: AgentSessionStore) -> int:
         raise ValueError("unsupported controller")
     store.save(controller, operator_events=[{
         "event_type": "budget_extended",
+        "source_ref": None,
         "description": f"{unit} extended from {before} to {after}; prior stop: {old_stop_reason or 'active'}",
         "timing": "before_next_attempt",
         "details": {"unit": unit, "before": before, "after": after,
