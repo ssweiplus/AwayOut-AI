@@ -176,13 +176,13 @@ python -m common.memory context <session_id>
 Persist a scoring-time memory extraction:
 
 ```bash
-python -m common.memory update <session_id> --data-file memory-update.json
+python -m common.memory update <session_id> --data-file memory-update.json --request-id memory-001
 ```
 
 Record target-system metadata when known:
 
 ```bash
-python -m common.memory metadata <session_id> --target-system "<target>"
+python -m common.memory metadata <session_id> --target-system "<target>" --request-id metadata-001
 ```
 
 ## Troubleshooting
