@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 import api
 from common.store import AgentSessionStore
+from common import memory
 
 
 class SessionContinuationTests(unittest.TestCase):
@@ -259,6 +260,26 @@ class SessionContinuationTests(unittest.TestCase):
                                 "--continue-after-success")
         self.assertEqual(extended["state"], "NEED_BRANCHES")
         self.assertEqual(extended["parent_ids"], [node])
+
+    def test_direct_memory_cli_uses_same_idempotency_log(self):
+        sid = self.create()
+        payload = {"items": [{
+            "type": "useful_clue", "content": "Retain only once",
+        }]}
+        def memory_cli(*args):
+            out = io.StringIO()
+            argv = ["memory.py", "--store", str(self.store_path), *args]
+            with patch.object(sys, "argv", argv), contextlib.redirect_stdout(out):
+                code = memory.main()
+            self.assertEqual(code, 0)
+            return json.loads(out.getvalue())
+        first = memory_cli("update", sid, "--data", json.dumps(payload),
+                           "--request-id", "memory-update-001")
+        replay = memory_cli("update", sid, "--data", json.dumps(payload),
+                            "--request-id", "memory-update-001")
+        self.assertTrue(replay["idempotency"]["replayed"])
+        self.assertEqual(len(first["working_memory"]["items"]), 1)
+        self.assertEqual(len(self.document(sid)["_runtime"]["working_memory"]["items"]), 1)
 
     def test_failed_submit_does_not_reserve_request(self):
         sid = self.create()
