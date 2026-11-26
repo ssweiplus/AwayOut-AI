@@ -68,6 +68,13 @@ def algorithm_selection_contract() -> dict:
 
 
 def emit(payload: dict, exit_code: int = 0) -> int:
+    # Windows legacy console encodings may be cp1252/gbk. JSON payloads can
+    # contain arbitrary Unicode from target responses or bundled prompts.
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
+        except (OSError, ValueError):
+            pass
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return exit_code
 
