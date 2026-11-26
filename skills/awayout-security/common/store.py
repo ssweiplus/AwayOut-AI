@@ -174,7 +174,8 @@ class AgentSessionStore:
                 "timing": str(event.get("timing", "unspecified")).strip() or "unspecified",
                 "details": event.get("details") if isinstance(event.get("details"), dict) else {},
                 "created_at": self._now(),
-                "state": previous_state, "source_ref": previous_ref,
+                "state": previous_state,
+                "source_ref": event.get("source_ref", previous_ref),
             })
         if memory_update is not None:
             apply_memory_update(runtime, memory_update)
