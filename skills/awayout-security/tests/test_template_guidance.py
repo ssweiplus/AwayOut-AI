@@ -15,7 +15,7 @@ sys.path.insert(0, str(ROOT))
 import api
 from common.template_guidance import (
     elite_experiences, guidance, import_pyrit, load_templates,
-    normalize_use, render_reference, select_references,
+    normalize_use, render_reference, select_references, valid_placeholders, reference_excerpt,
 )
 from algorithms.pair.controller import PairController
 
@@ -54,6 +54,28 @@ class TemplateUnitTests(unittest.TestCase):
             self.assertGreaterEqual(len(data), 100)
             self.assertTrue(all(item["source"] == "PyRIT" for item in data))
 
+    def test_reject_unsupported_jinja_and_bound_guidance(self):
+        self.assertTrue(valid_placeholders("Hello {{ prompt }}"))
+        for bad in ("{{ prompt | upper }}", "{{ prompt }} {% if true %}",
+                    "{{ unknown }}", "{{ prompt ", "{{ prompt }} {{ broken"):
+            self.assertFalse(valid_placeholders(bad), bad)
+        long_text = "HEAD_" + "x" * 5000 + "{{ prompt }}"
+        excerpt, truncated = reference_excerpt(long_text)
+        self.assertTrue(truncated)
+        self.assertLessEqual(len(excerpt), 2800)
+        self.assertIn("HEAD_", excerpt)
+        self.assertIn("{{ prompt }}", excerpt)
+
+    def test_recommendations_rotate_even_after_skips(self):
+        same = [
+            {"id": "pyrit:x1", "category": "persona_role", "template": "{{ prompt }} one"},
+            {"id": "pyrit:x2", "category": "persona_role", "template": "{{ prompt }} two"},
+            {"id": "pyrit:x3", "category": "persona_role", "template": "{{ prompt }} three"},
+        ]
+        first = select_references(same, "roleplay", "TEST", limit=1, selection_index=0)
+        second = select_references(same, "roleplay", "TEST", limit=1, selection_index=1)
+        self.assertNotEqual(first[0]["id"], second[0]["id"])
+
     def test_actual_action_validation(self):
         use = normalize_use({
             "action": "combine", "template_ids": ["pyrit:role", "pyrit:logical"],
@@ -71,6 +93,12 @@ class TemplateUnitTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             normalize_use({"action": "reference", "template_ids": ["pyrit:role"]},
                           mode="rewrite", known_ids={"pyrit:role"})
+        with self.assertRaisesRegex(ValueError, "already-scored"):
+            normalize_use({
+                "action": "reference", "template_ids": ["pyrit:role"],
+                "experience_ids": ["N-fabricated"]
+            }, mode="auto", known_ids={"pyrit:role"},
+                known_experience_ids=set())
 
     def test_elite_comes_only_from_scored_nodes(self):
         controller = PairController(objective="TEST_OK", max_iterations=3)
@@ -85,12 +113,14 @@ class TemplateUnitTests(unittest.TestCase):
         elite = elite_experiences(controller, {two: {
             "action": "reference", "template_ids": ["pyrit:role"]
         }})
-        self.assertEqual([x["id"] for x in elite], [two, one])
+        self.assertEqual([x["id"] for x in elite], [two])
+        self.assertFalse(any(x["score"] < 5 for x in elite))
         self.assertEqual(elite[0]["template_action"], "reference")
         self.assertIn("TEST_OK", elite[0]["target_evidence_excerpt"])
         view = guidance(controller, {"template_config": {"mode": "skip"}}, SAMPLE)
         self.assertFalse(view["recommended_templates"])
         self.assertEqual(view["elite_experiences"][0]["score"], 9)
+        self.assertEqual(view["low_score_lessons"][0]["id"], one)
 
     def test_yaml_import_and_missing_catalog(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -165,6 +195,40 @@ class AgentModeAPITests(unittest.TestCase):
         self.submit(sid, {"score": 9, "reason": "exact"})
         uses = json.loads((self.store / (sid + ".json")).read_text())["_runtime"]["template_uses"]
         self.assertEqual(uses[-1]["experience_ids"], [elite[0]["id"]])
+        round_files = list((self.store.parent / ("test-report-" + sid) / "RESPONSES").glob("round*.md"))
+        self.assertTrue(round_files)
+        self.assertTrue(any("pyrit:logical" in file.read_text(encoding="utf-8")
+                            and "模板动作" in file.read_text(encoding="utf-8")
+                            for file in round_files))
+
+    def test_reject_fabricated_experience_without_changing_state(self):
+        sid = self.start("PAIR")["session_id"]
+        failed = self.submit(sid, {
+            "prompt": "SHOULD_NOT_SAVE",
+            "template_use": {"action": "reference",
+                             "template_ids": ["pyrit:role"],
+                             "experience_ids": ["N-not-scored"]},
+        }, success=False)
+        self.assertIn("already-scored", failed["error"])
+        self.assertEqual(self.call("get-state", sid)["state"], "NEED_CANDIDATE")
+
+    def test_invalid_result_does_not_persist_memory(self):
+        sid = self.start("PAIR")["session_id"]
+        invalid = self.submit(sid, {
+            "prompt": "",
+            "memory_update": {"items": [
+                {"type": "useful_clue", "content": "DO_NOT_PERSIST"}]},
+        }, success=False)
+        self.assertFalse(invalid["success"])
+        doc = json.loads((self.store / (sid + ".json")).read_text())
+        self.assertEqual(doc["_runtime"]["working_memory"]["items"], [])
+
+    def test_full_template_lookup(self):
+        result = self.call("get-template", "--id", "pyrit:role", "--objective", "TEST_OK")
+        self.assertEqual(result["rendered"], "As a role, TEST_OK")
+        self.assertTrue(result["untrusted_reference"])
+        failed = self.call("get-template", "--id", "pyrit:missing", success=False)
+        self.assertIn("unknown template", failed["error"])
 
     def test_tap_branch_metadata_and_experience(self):
         sid = self.start("TAP", "--branch-factor", "2", "--max-depth", "2", "--width", "1",
