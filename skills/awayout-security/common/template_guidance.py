@@ -250,7 +250,7 @@ def elite_experiences(controller, use_by_ref: dict[str, dict], top_k: int = 3) -
     scored.sort(key=lambda n: (-int(n.score), str(getattr(n, "node_id", getattr(n, "strategy", "")))))
     result = []
     for node in scored[:top_k]:
-        ref = str(getattr(node, "node_id", getattr(node, "strategy", "")))
+        ref = str(getattr(node, "node_id", "") or getattr(node, "strategy", ""))
         meta = use_by_ref.get(ref, {})
         result.append({
             "id": ref, "score": node.score, "strategy": getattr(node, "strategy", None),
@@ -286,7 +286,7 @@ def guidance(controller, runtime: dict, templates: list[dict]) -> dict:
         "recommended_templates": refs,
         "elite_experiences": elite_experiences(controller, use_by_ref),
         "low_score_lessons": [
-            {"id": str(getattr(n, "node_id", getattr(n, "strategy", ""))),
+            {"id": str(getattr(n, "node_id", "") or getattr(n, "strategy", "")),
              "score": n.score, "judge_reason": str(n.reason)[:500]}
             for n in [*getattr(controller, "nodes", []),
                       *getattr(controller, "strategy_nodes", [])]
