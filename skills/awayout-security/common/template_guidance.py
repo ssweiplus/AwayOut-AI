@@ -40,6 +40,7 @@ SUGGESTED_CATEGORY_BY_NAME = {
 }
 PLACEHOLDER = re.compile(r"\{\{\s*([a-zA-Z_]\w*)\s*\}\}")
 MAX_TEMPLATE_CHARS = 20000
+MAX_REFERENCE_CHARS = 2800
 
 
 def catalog_path(store_directory: str | Path) -> Path:
@@ -52,6 +53,26 @@ def render_reference(value: str, objective: str) -> str:
         lambda m: objective if m.group(1) in {"prompt", "objective"} else m.group(0),
         value,
     )
+
+
+def valid_placeholders(value: str) -> bool:
+    """Allow simple objective slots only; reject Jinja expressions or control tags."""
+    if "{%" in value or "{#" in value:
+        return False
+    slots = re.findall(r"\{\{(.*?)\}\}", value, flags=re.DOTALL)
+    if value.count("{{") != len(slots) or value.count("}}") != len(slots):
+        return False
+    return all(re.fullmatch(r"\s*(?:prompt|objective)\s*", slot) for slot in slots)
+
+
+def reference_excerpt(text: str) -> tuple[str, bool]:
+    """Include beginning and ending, retaining the usual trailing objective slot."""
+    if len(text) <= MAX_REFERENCE_CHARS:
+        return text, False
+    front = MAX_REFERENCE_CHARS // 2
+    back = MAX_REFERENCE_CHARS - front
+    return (text[:front] + "\n[... reference truncated; fetch full template by ID ...]\n"
+            + text[-back:], True)
 
 
 def import_pyrit(source: str | Path, destination: str | Path) -> dict:
@@ -84,9 +105,13 @@ def import_pyrit(source: str | Path, destination: str | Path) -> dict:
                 or raw.get("data_type", "text") != "text"):
             skipped.append({"file": str(path.relative_to(root)), "reason": "unsupported text template"})
             continue
-        variables = set(PLACEHOLDER.findall(value))
-        if variables - {"prompt", "objective"} or "{%" in value or "{#" in value:
-            skipped.append({"file": str(path.relative_to(root)), "reason": "unsupported Jinja variables or statements"})
+        parameters = raw.get("parameters", ["prompt"])
+        if (not isinstance(parameters, list)
+                or any(not isinstance(p, str) or p not in {"prompt", "objective"}
+                       for p in parameters)
+                or not valid_placeholders(value)):
+            skipped.append({"file": str(path.relative_to(root)),
+                            "reason": "unsupported template variables or Jinja syntax"})
             continue
         relative = path.relative_to(root).as_posix()
         name = str(raw.get("name") or path.stem).strip()
@@ -131,7 +156,8 @@ def load_templates(store_directory: str | Path) -> list[dict]:
 
 
 def select_references(templates: list[dict], strategy: str, objective: str,
-                      limit: int = 3, prior_ids: set[str] | None = None) -> list[dict]:
+                      limit: int = 3, prior_ids: set[str] | None = None,
+                      selection_index: int = 0) -> list[dict]:
     """Soft, deterministic recommendation with novelty and category diversity."""
     if not templates or limit <= 0:
         return []
@@ -146,14 +172,14 @@ def select_references(templates: list[dict], strategy: str, objective: str,
             str(item.get("id")),
         ),
     )
-    # Prefer category diversity, including an exploratory out-of-category seed.
-    selected = []
-    categories = set()
+    # Rotate within each category so repeated rounds do not suggest the
+    # same first lexicographic template even when the host agent skips it.
+    groups: dict[str, list[dict]] = {}
     for item in ranked:
-        category = item.get("category", UNCATEGORIZED)
-        if category not in categories:
-            selected.append(item)
-            categories.add(category)
+        groups.setdefault(str(item.get("category", UNCATEGORIZED)), []).append(item)
+    selected = []
+    for group in groups.values():
+        selected.append(group[selection_index % len(group)])
         if len(selected) >= limit:
             break
     for item in ranked:
@@ -161,17 +187,23 @@ def select_references(templates: list[dict], strategy: str, objective: str,
             break
         if item not in selected:
             selected.append(item)
-    return [{
-        "id": item["id"],
-        "name": item.get("name", item["id"]),
-        "category": item.get("category", UNCATEGORIZED),
-        "classification_source": item.get("classification_source", "unknown"),
-        "source": item.get("source", "PyRIT"),
-        "reference_text": render_reference(item["template"], objective),
-    } for item in selected[:limit]]
+    results = []
+    for item in selected[:limit]:
+        reference, truncated = reference_excerpt(render_reference(item["template"], objective))
+        results.append({
+            "id": item["id"],
+            "name": item.get("name", item["id"]),
+            "category": item.get("category", UNCATEGORIZED),
+            "classification_source": item.get("classification_source", "unknown"),
+            "source": item.get("source", "PyRIT"),
+            "reference_text": reference,
+            "truncated": truncated,
+        })
+    return results
 
 
-def normalize_use(raw: dict | None, *, mode: str, known_ids: set[str]) -> dict | None:
+def normalize_use(raw: dict | None, *, mode: str, known_ids: set[str],
+                  known_experience_ids: set[str] | None = None) -> dict | None:
     """Validate an actual LLM template decision before it is persisted."""
     if raw is None:
         return None  # Legacy callers remain valid and are not misreported.
@@ -197,6 +229,10 @@ def normalize_use(raw: dict | None, *, mode: str, known_ids: set[str]) -> dict |
     unknown = set(template_ids) - known_ids
     if unknown:
         raise ValueError(f"unknown template IDs: {sorted(unknown)}")
+    if known_experience_ids is not None:
+        missing = set(experience_ids) - known_experience_ids
+        if missing:
+            raise ValueError(f"experience IDs must reference already-scored nodes: {sorted(missing)}")
     if action != "skip" and not template_ids:
         raise ValueError("non-skip template action must specify template_ids")
     return {"action": action, "template_ids": template_ids,
@@ -235,8 +271,13 @@ def guidance(controller, runtime: dict, templates: list[dict]) -> dict:
     strategy = getattr(controller, "strategy", "")
     if not strategy and getattr(controller, "state", "") == "NEED_RECONSTRUCTIONS":
         strategy = "icl_structured"
+    index = len(getattr(controller, "nodes", []))
+    if not hasattr(controller, "nodes"):
+        states = ("NEED_BASELINE_PROMPT", "NEED_DECOMPOSITION",
+                  "NEED_SYNONYMS", "NEED_RECONSTRUCTIONS")
+        index = states.index(controller.state) if controller.state in states else 0
     refs = [] if mode == "skip" else select_references(
-        templates, strategy, controller.objective, limit, prior_ids)
+        templates, strategy, controller.objective, limit, prior_ids, index)
     return {
         "mode": mode, "strategy": strategy, "catalog_size": len(templates),
         "recommended_templates": refs,
@@ -252,6 +293,7 @@ def guidance(controller, runtime: dict, templates: list[dict]) -> dict:
             "shape": {"action": "reference|rewrite|combine|skip",
                       "template_ids": ["pyrit:id"], "experience_ids": ["N-node"]},
             "rule": "Report the action ACTUALLY taken; auto is a configuration mode, not an action. "
-                    "If no catalog is loaded, skip or omit template_use for legacy compatibility.",
+                    "If no catalog is loaded, skip or omit template_use for legacy compatibility. "
+                    "Truncated references can be fetched by CLI get-template --id.",
         },
     }
