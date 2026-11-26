@@ -177,6 +177,30 @@ class TapController:
             })
         return base
 
+    def extend_budget(self, extra_depth: int, *, continue_after_success: bool = False) -> dict:
+        """Extend search from the last scored layer without discarding the tree."""
+        if extra_depth < 1:
+            raise ValueError("extra_depth must be positive")
+        if self.state == "DONE":
+            if self.stop_reason == "success_threshold_reached":
+                if not continue_after_success:
+                    raise ValueError("session stopped on success; pass --continue-after-success to extend")
+            elif self.stop_reason != "max_depth_reached":
+                raise ValueError(f"session cannot be extended after: {self.stop_reason}")
+            scored = [node for node in self._nodes(self.current_ids)
+                      if not node.pruned and node.score is not None]
+            if not scored:
+                raise ValueError("no scored surviving branches available to extend")
+            scored.sort(key=lambda node: node.score or 0, reverse=True)
+            self.active_parent_ids = [node.node_id for node in scored[:self.width]]
+            self.depth += 1
+            self.current_ids = []
+            self.current_response_index = 0
+            self.state = "NEED_BRANCHES"
+            self.stop_reason = ""
+        self.max_depth += extra_depth
+        return self.next_action()
+
     def submit_branches(self, branches: list[dict]) -> dict:
         self._require("NEED_BRANCHES")
         if not branches:
