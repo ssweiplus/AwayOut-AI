@@ -221,7 +221,10 @@ def main() -> int:
         pair = PairController(objective="score-policy", max_iterations=2)
         pair.submit_candidate("p1")
         pair.submit_response("r1")
-        internal = enrich(pair, AgentSessionStore(tempfile.mkdtemp()), pair.next_action())
+        with tempfile.TemporaryDirectory() as directory:
+            store = AgentSessionStore(str(Path(directory) / ".awayout-agent"))
+            store.save(pair)
+            internal = enrich(pair, store, pair.next_action())
         if internal["handoff"].get("visibility") != "internal":
             raise RuntimeError("scoring is not internal-only")
         anchors = internal.get("rubric", {}).get("anchors", [])
