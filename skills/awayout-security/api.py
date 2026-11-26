@@ -808,6 +808,51 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+MUTATION_COMMANDS = {
+    "submit-user-input", "submit-candidate", "submit-response",
+    "submit-tap-response", "submit-drattack-response", "submit-judgement",
+    "submit-result", "add-feedback", "add-event", "extend-test",
+}
+
+
+def request_digest(args: argparse.Namespace) -> str:
+    """Hash semantic request content rather than ephemeral --*-file paths."""
+    payload = vars(args).copy()
+    for field in ("command", "store", "session_id", "request_id"):
+        payload.pop(field, None)
+    if args.command == "submit-result":
+        payload.pop("data", None)
+        payload.pop("data_file", None)
+        payload["content"] = read_json(args.data, args.data_file)
+    elif args.command == "submit-user-input":
+        payload.pop("message", None)
+        payload.pop("message_file", None)
+        payload["content"] = read_text(args.message, args.message_file, "message")
+    else:
+        text_inputs = {
+            "submit-candidate": ("prompt", "prompt_file"),
+            "submit-response": ("response", "response_file"),
+            "submit-tap-response": ("response", "response_file"),
+            "submit-drattack-response": ("response", "response_file"),
+            "submit-judgement": ("reason", "reason_file"),
+            "add-feedback": ("feedback", "feedback_file"),
+            "add-event": ("description", "description_file"),
+        }
+        if args.command in text_inputs:
+            field, file_field = text_inputs[args.command]
+            payload.pop(field, None)
+            payload.pop(file_field, None)
+            payload["content"] = read_text(getattr(args, field), getattr(args, file_field), field)
+        if args.command == "submit-judgement":
+            payload.pop("memory_data", None)
+            payload.pop("memory_data_file", None)
+            payload["memory"] = (read_json(args.memory_data, args.memory_data_file)
+                                 if args.memory_data or args.memory_data_file else None)
+    normalized = json.dumps({"command": args.command, "payload": payload},
+                            ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
@@ -836,6 +881,25 @@ def main() -> int:
         "get-summary": cmd_summary,
     }
     try:
+        if args.command in MUTATION_COMMANDS:
+            with store.session_lock(args.session_id):
+                if args.request_id:
+                    if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}", args.request_id):
+                        raise ValueError("invalid request-id: use 1-128 alphanumeric/_.:- characters")
+                    digest = request_digest(args)
+                    previous = store.get_request(args.session_id, args.request_id)
+                    if previous is not None:
+                        if previous.get("digest") != digest:
+                            raise ValueError("request-id already used with different content")
+                        controller = store.load(args.session_id)
+                        result = enrich(controller, store, controller.next_action())
+                        result["idempotency"] = {"request_id": args.request_id,
+                                                 "replayed": True,
+                                                 "state_is_current": True}
+                        return emit({"success": True, "result": result})
+                    store.set_pending_request({"request_id": args.request_id,
+                                               "digest": digest, "command": args.command})
+                return handlers[args.command](args, store)
         return handlers[args.command](args, store)
     except Exception as exc:
         return fail(str(exc))
