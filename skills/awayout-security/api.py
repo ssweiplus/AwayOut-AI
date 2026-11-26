@@ -386,8 +386,7 @@ def cmd_start(args: argparse.Namespace, store: AgentSessionStore) -> int:
         )
     else:
         return fail(f"unsupported algorithm: {args.algorithm}. Available: PAIR, TAP, DrAttack")
-    store.save(controller)
-    store.set_template_config(controller.session_id, args.template_mode, args.template_limit)
+    store.save(controller, template_config={"mode": args.template_mode, "limit": args.template_limit})
     return emit_state(controller, store)
 
 
@@ -438,10 +437,19 @@ def cmd_user_input(args: argparse.Namespace, store: AgentSessionStore) -> int:
 
 
 def _verified_template_use(store: AgentSessionStore, session_id: str, raw: dict | None) -> dict | None:
+    if raw is None:
+        return None
     runtime = store.get_document(session_id).get("_runtime", {})
     mode = runtime.get("template_config", {}).get("mode", "auto")
     known_ids = {item["id"] for item in load_templates(store.directory)}
-    return normalize_use(raw, mode=mode, known_ids=known_ids)
+    current = store.load(session_id)
+    scored_ids = {
+        str(getattr(node, "node_id", getattr(node, "strategy", "")))
+        for node in [*getattr(current, "nodes", []), *getattr(current, "strategy_nodes", [])]
+        if getattr(node, "score", None) is not None
+    }
+    return normalize_use(raw, mode=mode, known_ids=known_ids,
+                         known_experience_ids=scored_ids)
 
 
 def cmd_import_pyrit(args: argparse.Namespace, store: AgentSessionStore) -> int:
@@ -475,9 +483,8 @@ def cmd_candidate(args: argparse.Namespace, store: AgentSessionStore) -> int:
             "experience_ids": [v.strip() for v in args.experience_ids.split(",") if v.strip()],
         })
     controller.submit_candidate(read_text(args.prompt, args.prompt_file, "prompt"), args.strategy)
-    store.save(controller)
-    if use:
-        store.record_template_use(args.session_id, controller.current_node_id, use)
+    uses = [(controller.current_node_id, use)] if use else None
+    store.save(controller, template_uses=uses)
     return emit_state(controller, store)
 
 
@@ -512,11 +519,14 @@ def cmd_judgement(args: argparse.Namespace, store: AgentSessionStore) -> int:
     controller = store.load(args.session_id)
     if not isinstance(controller, PairController):
         raise ValueError("submit-judgement is PAIR-only")
+    memory_update = None
     if args.memory_data or args.memory_data_file:
         memory = read_json(args.memory_data, args.memory_data_file)
-        store.add_memory_update(args.session_id, memory.get("memory_update", memory))
+        memory_update = memory.get("memory_update", memory)
+        if not isinstance(memory_update, dict):
+            raise ValueError("memory_update must be an object")
     controller.submit_judgement(args.score, read_text(args.reason, args.reason_file, "reason"))
-    store.save(controller)
+    store.save(controller, memory_update=memory_update)
     return emit_state(controller, store)
 
 
@@ -526,8 +536,9 @@ def cmd_result(args: argparse.Namespace, store: AgentSessionStore) -> int:
     state = controller.state
     pending_template_uses = []
 
-    if isinstance(data.get("memory_update"), dict):
-        store.add_memory_update(args.session_id, data["memory_update"])
+    pending_memory_update = data.get("memory_update")
+    if pending_memory_update is not None and not isinstance(pending_memory_update, dict):
+        raise ValueError("memory_update must be an object")
 
     if isinstance(controller, PairController):
         if state == "NEED_CANDIDATE":
@@ -593,9 +604,8 @@ def cmd_result(args: argparse.Namespace, store: AgentSessionStore) -> int:
     else:
         raise ValueError("unknown controller type")
 
-    store.save(controller)
-    for source_ref, use in pending_template_uses:
-        store.record_template_use(args.session_id, source_ref, use)
+    store.save(controller, template_uses=pending_template_uses,
+               memory_update=pending_memory_update)
     return emit_state(controller, store)
 
 
