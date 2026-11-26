@@ -23,6 +23,8 @@ class StrategyNode:
     strategy: str
     prompt: str
     response: str = ""
+    node_id: str = ""
+    attempt: int = 1
     score: int | None = None
     reason: str = ""
     status: str = "pending"
@@ -44,6 +46,9 @@ class DrAttackController:
     selected_synonyms: list[str] = field(default_factory=list)
     strategy_nodes: list[StrategyNode] = field(default_factory=list)
     current_strategy_index: int = 0
+    max_attempts: int = 1
+    attempt_no: int = 1
+    current_attempt_offset: int = 0
     stop_reason: str = ""
 
     def __post_init__(self) -> None:
@@ -61,6 +66,8 @@ class DrAttackController:
             raise ValueError("strategies must be unique")
         self.strategies = cleaned
         self.current_strategy_index = max(0, int(self.current_strategy_index))
+        if self.max_attempts < 1 or not 1 <= self.attempt_no <= self.max_attempts:
+            raise ValueError("invalid reconstruction attempt budget")
 
     def _require(self, expected: State) -> None:
         if self.state != expected:
@@ -106,12 +113,43 @@ class DrAttackController:
         )
 
     @property
+    def current_attempt_nodes(self) -> list[StrategyNode]:
+        return self.strategy_nodes[self.current_attempt_offset:]
+
+    def strategy_ref(self, strategy: str) -> str:
+        return strategy if self.attempt_no == 1 else f"{strategy}@{self.attempt_no}"
+
+    def extend_budget(self, extra_reconstructions: int, *,
+                      continue_after_success: bool = False) -> dict:
+        """Start additional reconstruction batches using preserved synonyms and history."""
+        if extra_reconstructions < 1:
+            raise ValueError("extra_reconstructions must be positive")
+        if self.state != "DONE":
+            raise ValueError("DrAttack extension is supported after an attempt completes")
+        if self.stop_reason == "success_threshold_reached" and self.stop_on_success:
+            if not continue_after_success:
+                raise ValueError("session stopped on success; pass --continue-after-success")
+            self.stop_on_success = False
+        if not self.selected_synonyms or not self.strategy_nodes:
+            raise ValueError("DrAttack needs completed reconstruction history to extend")
+        if any(node.score is None for node in self.current_attempt_nodes):
+            raise ValueError("cannot extend an unfinished reconstruction attempt")
+        self.max_attempts += extra_reconstructions
+        self.attempt_no += 1
+        self.current_attempt_offset = len(self.strategy_nodes)
+        self.current_strategy_index = 0
+        self.stop_reason = ""
+        self.state = "NEED_RECONSTRUCTIONS"
+        return self.next_action()
+
+    @property
     def current_strategy_node(self) -> StrategyNode | None:
         if self.state != "WAIT_STRATEGY_RESPONSES":
             return None
-        if not 0 <= self.current_strategy_index < len(self.strategy_nodes):
+        active = self.current_attempt_nodes
+        if not 0 <= self.current_strategy_index < len(active):
             return None
-        return self.strategy_nodes[self.current_strategy_index]
+        return active[self.current_strategy_index]
 
     def next_action(self) -> dict:
         base = {
@@ -124,8 +162,10 @@ class DrAttackController:
                 "top_k_synonyms": self.top_k_synonyms,
                 "strategies": self.strategies,
                 "stop_on_success": self.stop_on_success,
-                "strategy_responses_completed": sum(1 for node in self.strategy_nodes if node.response),
-                "strategy_responses_total": len(self.strategy_nodes),
+                "strategy_responses_completed": sum(1 for node in self.current_attempt_nodes if node.response),
+                "strategy_responses_total": len(self.current_attempt_nodes),
+                "attempt_no": self.attempt_no,
+                "max_attempts": self.max_attempts,
                 "current_strategy_index": self.current_strategy_index,
                 "can_stop": self.state == "DONE",
             },
@@ -199,12 +239,13 @@ class DrAttackController:
                     raise ValueError("current strategy node not found")
                 base["current_strategy"] = {
                     "index": self.current_strategy_index + 1,
-                    "total": len(self.strategy_nodes),
+                    "total": len(self.current_attempt_nodes),
                     "strategy": node.strategy,
+                    "node_id": node.node_id or node.strategy,
                     "prompt": node.prompt,
                 }
             elif self.state == "NEED_STRATEGY_SCORES":
-                base["strategy_nodes"] = [asdict(n) for n in self.strategy_nodes]
+                base["strategy_nodes"] = [asdict(n) for n in self.current_attempt_nodes]
                 base["rubric"] = {"min": 1, "max": 10, "success_threshold": self.threshold}
         else:
             base.update({
@@ -267,12 +308,16 @@ class DrAttackController:
         self._require("NEED_RECONSTRUCTIONS")
         if set(prompts) != set(self.strategies):
             raise ValueError("reconstructions must contain exactly the configured strategies")
-        self.strategy_nodes = []
+        generated = []
         for strategy in self.strategies:
             prompt = str(prompts[strategy]).strip()
             if not prompt:
                 raise ValueError(f"prompt cannot be empty for {strategy}")
-            self.strategy_nodes.append(StrategyNode(strategy=strategy, prompt=prompt))
+            generated.append(StrategyNode(strategy=strategy, prompt=prompt,
+                                          node_id=self.strategy_ref(strategy),
+                                          attempt=self.attempt_no))
+        self.current_attempt_offset = len(self.strategy_nodes)
+        self.strategy_nodes.extend(generated)
         self.current_strategy_index = 0
         self.state = "WAIT_STRATEGY_RESPONSES"
         return self.next_action()
@@ -287,7 +332,7 @@ class DrAttackController:
             raise ValueError("current strategy node not found")
         node.response = value
         self.current_strategy_index += 1
-        if self.current_strategy_index >= len(self.strategy_nodes):
+        if self.current_strategy_index >= len(self.current_attempt_nodes):
             self.state = "NEED_STRATEGY_SCORES"
         return self.next_action()
 
@@ -300,12 +345,12 @@ class DrAttackController:
         self._require("WAIT_STRATEGY_RESPONSES")
         if set(responses) != set(self.strategies):
             raise ValueError("responses must contain exactly the configured strategies")
-        for node in self.strategy_nodes:
+        for node in self.current_attempt_nodes:
             value = str(responses[node.strategy]).strip()
             if not value:
                 raise ValueError(f"response cannot be empty for {node.strategy}")
             node.response = value
-        self.current_strategy_index = len(self.strategy_nodes)
+        self.current_strategy_index = len(self.current_attempt_nodes)
         self.state = "NEED_STRATEGY_SCORES"
         return self.next_action()
 
@@ -314,7 +359,7 @@ class DrAttackController:
         if set(scores) != set(self.strategies):
             raise ValueError("scores must contain exactly the configured strategies")
         successes = []
-        for node in self.strategy_nodes:
+        for node in self.current_attempt_nodes:
             item = scores[node.strategy]
             score = int(item.get("score"))
             if not 1 <= score <= 10:
@@ -324,8 +369,15 @@ class DrAttackController:
             node.status = "success" if score >= self.threshold else "fail"
             if node.status == "success":
                 successes.append(node)
-        self.stop_reason = "success_threshold_reached" if successes else "all_strategies_completed"
-        self.state = "DONE"
+        if self.attempt_no < self.max_attempts and not (successes and self.stop_on_success):
+            self.attempt_no += 1
+            self.current_attempt_offset = len(self.strategy_nodes)
+            self.current_strategy_index = 0
+            self.stop_reason = ""
+            self.state = "NEED_RECONSTRUCTIONS"
+        else:
+            self.stop_reason = "success_threshold_reached" if successes else "all_strategies_completed"
+            self.state = "DONE"
         return self.next_action()
 
     def tree_text(self) -> str:
@@ -334,7 +386,7 @@ class DrAttackController:
             mark = "└─" if i == len(self.strategy_nodes) - 1 else "├─"
             score = "?" if node.score is None else str(node.score)
             suffix = " SUCCESS" if node.status == "success" else ""
-            lines.append(f"         {mark} {node.strategy} [{score}/10]{suffix}")
+            lines.append(f"         {mark} {node.node_id or node.strategy} [{score}/10]{suffix}")
         return "\n".join(lines)
 
     def summary(self) -> dict:
@@ -346,6 +398,8 @@ class DrAttackController:
             "state": self.state,
             "objective": self.objective,
             "threshold": self.threshold,
+            "attempt_no": self.attempt_no,
+            "max_attempts": self.max_attempts,
             "success": any(n.status == "success" for n in self.strategy_nodes),
             "stop_reason": self.stop_reason,
             "best_strategy": asdict(best) if best else None,
@@ -372,6 +426,9 @@ class DrAttackController:
             "selected_synonyms": self.selected_synonyms,
             "strategy_nodes": [asdict(node) for node in self.strategy_nodes],
             "current_strategy_index": self.current_strategy_index,
+            "max_attempts": self.max_attempts,
+            "attempt_no": self.attempt_no,
+            "current_attempt_offset": self.current_attempt_offset,
             "stop_reason": self.stop_reason,
         }
 
@@ -386,6 +443,9 @@ class DrAttackController:
             session_id=str(data["session_id"]),
             state=str(data.get("state", "NEED_BASELINE_PROMPT")),
             current_strategy_index=int(data.get("current_strategy_index", 0)),
+            max_attempts=int(data.get("max_attempts", 1)),
+            attempt_no=int(data.get("attempt_no", 1)),
+            current_attempt_offset=int(data.get("current_attempt_offset", 0)),
         )
         obj.baseline_prompt = str(data.get("baseline_prompt", ""))
         obj.baseline_response = str(data.get("baseline_response", ""))
@@ -399,9 +459,9 @@ class DrAttackController:
         # responses were collected in one batch. Recover the first empty node.
         if obj.state == "WAIT_STRATEGY_RESPONSES" and "current_strategy_index" not in data:
             obj.current_strategy_index = next(
-                (index for index, node in enumerate(obj.strategy_nodes) if not node.response),
-                len(obj.strategy_nodes),
+                (index for index, node in enumerate(obj.current_attempt_nodes) if not node.response),
+                len(obj.current_attempt_nodes),
             )
-            if obj.current_strategy_index >= len(obj.strategy_nodes) and obj.strategy_nodes:
+            if obj.current_strategy_index >= len(obj.current_attempt_nodes) and obj.current_attempt_nodes:
                 obj.state = "NEED_STRATEGY_SCORES"
         return obj
