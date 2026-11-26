@@ -28,6 +28,9 @@ from common.presenter import (
 )
 from common.scoring import objective_scoring_rubric
 from common.store import AgentSessionStore
+from common.template_guidance import (
+    catalog_path, guidance as template_guidance, import_pyrit, load_templates, normalize_use,
+)
 
 
 def algorithm_selection_contract() -> dict:
@@ -244,6 +247,19 @@ def enrich(controller, store: AgentSessionStore, result: dict) -> dict:
 
     handoff = payload.get("handoff") if isinstance(payload.get("handoff"), dict) else {}
     kind = str(handoff.get("kind", ""))
+    generation_kinds = {
+        "generate_candidate", "generate_branches", "generate_baseline_prompt",
+        "decompose_objective", "generate_synonym_candidates", "reconstruct_strategies",
+    }
+    if kind in generation_kinds:
+        runtime = store.get_document(controller.session_id).get("_runtime", {})
+        handoff["template_guidance"] = template_guidance(
+            controller, runtime, load_templates(store.directory))
+        handoff["instruction"] = (
+            str(handoff.get("instruction", "")) +
+            " Consult handoff.template_guidance as optional references and elite experience; "
+            "record the actual template action when submitting generated prompts."
+        )
     needs_target_interaction = kind == "human_target_interaction"
     is_final = kind == "present_result"
 
@@ -371,6 +387,7 @@ def cmd_start(args: argparse.Namespace, store: AgentSessionStore) -> int:
     else:
         return fail(f"unsupported algorithm: {args.algorithm}. Available: PAIR, TAP, DrAttack")
     store.save(controller)
+    store.set_template_config(controller.session_id, args.template_mode, args.template_limit)
     return emit_state(controller, store)
 
 
@@ -420,12 +437,44 @@ def cmd_user_input(args: argparse.Namespace, store: AgentSessionStore) -> int:
     return emit({"success": True, "result": result})
 
 
+def _verified_template_use(store: AgentSessionStore, session_id: str, raw: dict | None) -> dict | None:
+    runtime = store.get_document(session_id).get("_runtime", {})
+    mode = runtime.get("template_config", {}).get("mode", "auto")
+    known_ids = {item["id"] for item in load_templates(store.directory)}
+    return normalize_use(raw, mode=mode, known_ids=known_ids)
+
+
+def cmd_import_pyrit(args: argparse.Namespace, store: AgentSessionStore) -> int:
+    report = import_pyrit(args.source, catalog_path(store.directory))
+    return emit({"success": True, "result": report})
+
+
+def cmd_list_templates(args: argparse.Namespace, store: AgentSessionStore) -> int:
+    items = load_templates(store.directory)
+    return emit({"success": True, "result": {
+        "total": len(items), "catalog": str(catalog_path(store.directory)),
+        "templates": [{"id": item["id"], "name": item.get("name"),
+                       "category": item.get("category"),
+                       "classification_source": item.get("classification_source")}
+                      for item in items],
+    }})
+
+
 def cmd_candidate(args: argparse.Namespace, store: AgentSessionStore) -> int:
     controller = store.load(args.session_id)
     if not isinstance(controller, PairController):
         raise ValueError("submit-candidate is PAIR-only")
+    use = None
+    if args.template_action:
+        use = _verified_template_use(store, args.session_id, {
+            "action": args.template_action,
+            "template_ids": [v.strip() for v in args.template_ids.split(",") if v.strip()],
+            "experience_ids": [v.strip() for v in args.experience_ids.split(",") if v.strip()],
+        })
     controller.submit_candidate(read_text(args.prompt, args.prompt_file, "prompt"), args.strategy)
     store.save(controller)
+    if use:
+        store.record_template_use(args.session_id, controller.current_node_id, use)
     return emit_state(controller, store)
 
 
@@ -472,13 +521,17 @@ def cmd_result(args: argparse.Namespace, store: AgentSessionStore) -> int:
     controller = store.load(args.session_id)
     data = read_json(args.data, args.data_file)
     state = controller.state
+    pending_template_uses = []
 
     if isinstance(data.get("memory_update"), dict):
         store.add_memory_update(args.session_id, data["memory_update"])
 
     if isinstance(controller, PairController):
         if state == "NEED_CANDIDATE":
+            use = _verified_template_use(store, args.session_id, data.get("template_use"))
             controller.submit_candidate(str(data.get("prompt", "")), data.get("strategy"))
+            if use:
+                pending_template_uses.append((controller.current_node_id, use))
         elif state == "WAIT_TARGET_RESPONSE":
             controller.submit_response(str(data.get("response", "")))
         elif state == "NEED_JUDGEMENT":
@@ -488,7 +541,13 @@ def cmd_result(args: argparse.Namespace, store: AgentSessionStore) -> int:
 
     elif isinstance(controller, TapController):
         if state == "NEED_BRANCHES":
-            controller.submit_branches(list(data.get("branches", [])))
+            branches = list(data.get("branches", []))
+            uses = [_verified_template_use(store, args.session_id, item.get("template_use"))
+                    for item in branches]
+            controller.submit_branches(branches)
+            pending_template_uses.extend(
+                (node_id, use) for node_id, use in zip(controller.current_ids, uses) if use
+            )
         elif state == "NEED_OFFTOPIC_REVIEW":
             controller.submit_offtopic_review(list(data.get("keep_node_ids", [])))
         elif state == "WAIT_TARGET_RESPONSES":
@@ -500,7 +559,10 @@ def cmd_result(args: argparse.Namespace, store: AgentSessionStore) -> int:
 
     elif isinstance(controller, DrAttackController):
         if state == "NEED_BASELINE_PROMPT":
+            use = _verified_template_use(store, args.session_id, data.get("template_use"))
             controller.submit_baseline_prompt(str(data.get("prompt", "")))
+            if use:
+                pending_template_uses.append(("baseline", use))
         elif state == "WAIT_BASELINE_RESPONSE":
             controller.submit_baseline_response(str(data.get("response", "")))
         elif state == "NEED_DECOMPOSITION":
@@ -508,7 +570,17 @@ def cmd_result(args: argparse.Namespace, store: AgentSessionStore) -> int:
         elif state == "NEED_SYNONYMS":
             controller.submit_synonyms(list(data.get("candidates", [])), list(data.get("selected", [])))
         elif state == "NEED_RECONSTRUCTIONS":
+            raw_uses = data.get("template_uses", {})
+            if not isinstance(raw_uses, dict):
+                raise ValueError("template_uses must be an object keyed by strategy")
+            if set(raw_uses) - set(controller.strategies):
+                raise ValueError("template_uses contains an unknown strategy")
+            uses = {strategy: _verified_template_use(store, args.session_id, item)
+                    for strategy, item in raw_uses.items()}
             controller.submit_reconstructions(dict(data.get("prompts", {})))
+            pending_template_uses.extend(
+                (strategy, use) for strategy, use in uses.items() if use
+            )
         elif state == "WAIT_STRATEGY_RESPONSES":
             controller.submit_strategy_response(str(data.get("response", "")))
         elif state == "NEED_STRATEGY_SCORES":
@@ -519,6 +591,8 @@ def cmd_result(args: argparse.Namespace, store: AgentSessionStore) -> int:
         raise ValueError("unknown controller type")
 
     store.save(controller)
+    for source_ref, use in pending_template_uses:
+        store.record_template_use(args.session_id, source_ref, use)
     return emit_state(controller, store)
 
 
@@ -577,6 +651,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("describe-algorithms")
+    importer = sub.add_parser("import-pyrit")
+    importer.add_argument("--source", required=True, help="local PyRIT YAML template directory")
+    sub.add_parser("list-templates")
 
     start = sub.add_parser("start-test")
     start.add_argument("--algorithm", default="PAIR")
@@ -591,6 +668,8 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--top-k-synonyms", type=int, default=3)
     start.add_argument("--strategies", default="icl_structured,icl_unstructured,word_game,icl_demo1,icl_demo2")
     start.add_argument("--stop-on-success", action="store_true")
+    start.add_argument("--template-mode", choices=("auto", "reference", "rewrite", "combine", "skip"), default="auto")
+    start.add_argument("--template-limit", type=int, choices=(1, 2, 3), default=3)
 
     user_input = sub.add_parser("submit-user-input")
     user_input.add_argument("session_id")
@@ -602,6 +681,9 @@ def build_parser() -> argparse.ArgumentParser:
     candidate.add_argument("--prompt")
     candidate.add_argument("--prompt-file")
     candidate.add_argument("--strategy", default=None)
+    candidate.add_argument("--template-action", choices=("reference", "rewrite", "combine", "skip"))
+    candidate.add_argument("--template-ids", default="")
+    candidate.add_argument("--experience-ids", default="")
 
     response = sub.add_parser("submit-response")
     response.add_argument("session_id")
@@ -659,6 +741,8 @@ def main() -> int:
     store = AgentSessionStore(args.store)
     handlers = {
         "describe-algorithms": cmd_describe_algorithms,
+        "import-pyrit": cmd_import_pyrit,
+        "list-templates": cmd_list_templates,
         "start-test": cmd_start,
         "submit-user-input": cmd_user_input,
         "submit-candidate": cmd_candidate,
