@@ -69,6 +69,7 @@ class SessionContinuationTests(unittest.TestCase):
         self.assertTrue(again["idempotency"]["replayed"])
         self.assertEqual(again["progress"]["max_iterations"], 3)
         self.assertEqual(len(self.document(sid)["_runtime"]["operator_events"]), 1)
+        self.assertIsNone(self.document(sid)["_runtime"]["operator_events"][0]["source_ref"])
         self.result(sid, {"prompt": "Second", "template_use": {
             "action": "skip", "template_ids": [], "experience_ids": [],
         }}, request="candidate-2")
