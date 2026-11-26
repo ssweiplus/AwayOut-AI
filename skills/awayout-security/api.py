@@ -30,6 +30,7 @@ from common.scoring import objective_scoring_rubric
 from common.store import AgentSessionStore
 from common.template_guidance import (
     catalog_path, guidance as template_guidance, import_pyrit, load_templates, normalize_use,
+    render_reference,
 )
 
 
@@ -471,6 +472,18 @@ def cmd_list_templates(args: argparse.Namespace, store: AgentSessionStore) -> in
     }})
 
 
+def cmd_get_template(args: argparse.Namespace, store: AgentSessionStore) -> int:
+    item = next((value for value in load_templates(store.directory)
+                 if value["id"] == args.id), None)
+    if item is None:
+        raise ValueError(f"unknown template ID: {args.id}")
+    result = dict(item)
+    result["untrusted_reference"] = True
+    if args.objective is not None:
+        result["rendered"] = render_reference(result["template"], args.objective)
+    return emit({"success": True, "result": result})
+
+
 def cmd_candidate(args: argparse.Namespace, store: AgentSessionStore) -> int:
     controller = store.load(args.session_id)
     if not isinstance(controller, PairController):
@@ -667,6 +680,9 @@ def build_parser() -> argparse.ArgumentParser:
     importer = sub.add_parser("import-pyrit")
     importer.add_argument("--source", required=True, help="local PyRIT YAML template directory")
     sub.add_parser("list-templates")
+    get_template = sub.add_parser("get-template")
+    get_template.add_argument("--id", required=True)
+    get_template.add_argument("--objective", default=None)
 
     start = sub.add_parser("start-test")
     start.add_argument("--algorithm", default="PAIR")
@@ -756,6 +772,7 @@ def main() -> int:
         "describe-algorithms": cmd_describe_algorithms,
         "import-pyrit": cmd_import_pyrit,
         "list-templates": cmd_list_templates,
+        "get-template": cmd_get_template,
         "start-test": cmd_start,
         "submit-user-input": cmd_user_input,
         "submit-candidate": cmd_candidate,
