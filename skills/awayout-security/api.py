@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -66,6 +68,13 @@ def algorithm_selection_contract() -> dict:
 
 
 def emit(payload: dict, exit_code: int = 0) -> int:
+    # Windows legacy console encodings may be cp1252/gbk. JSON payloads can
+    # contain arbitrary Unicode from target responses or bundled prompts.
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
+        except (OSError, ValueError):
+            pass
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return exit_code
 
@@ -161,7 +170,7 @@ def _source_ref(controller) -> str | None:
         return node.node_id if node else None
     if isinstance(controller, DrAttackController) and controller.state == "WAIT_STRATEGY_RESPONSES":
         node = controller.current_strategy_node
-        return node.strategy if node else None
+        return (node.node_id or node.strategy) if node else None
     if isinstance(controller, DrAttackController) and controller.state == "WAIT_BASELINE_RESPONSE":
         return "baseline"
     return None
@@ -395,44 +404,29 @@ def cmd_user_input(args: argparse.Namespace, store: AgentSessionStore) -> int:
     message = read_text(args.message, args.message_file, "message")
     controller = store.load(args.session_id)
     parsed = parse_user_submission(message)
-
-    recorded_events = []
-    for event in parsed.get("events", []):
-        recorded_events.append(store.add_operator_event(
-            args.session_id,
-            str(event.get("event_type", "other")),
-            str(event.get("description", "")),
-            str(event.get("timing", "unspecified")),
-            event.get("details") if isinstance(event.get("details"), dict) else {},
-        ))
-
-    recorded_comments = []
-    for comment in parsed.get("comments", []):
-        recorded_comments.append(store.add_feedback(args.session_id, str(comment)))
-
     response = parsed.get("response")
-    advanced_without_response = parsed.get("mode") == "advanced" and not response
-    if advanced_without_response:
-        controller = store.load(args.session_id)
-        result = enrich(controller, store, controller.next_action())
-        result["user_input_receipt"] = {
-            "mode": parsed.get("mode"),
-            "response_accepted": False,
-            "state_advanced": False,
-            "events_recorded": len(recorded_events),
-            "comments_recorded": len(recorded_comments),
-        }
-        return emit({"success": True, "result": result})
+    comment_only = parsed.get("mode") == "advanced" and not response
 
-    _submit_target_response(controller, str(response or ""))
-    store.save(controller)
+    # Validate and advance in memory before writing *any* event or comment.
+    # One state write also checkpoints the request receipt, so a retried
+    # response cannot duplicate operator events or advance the next branch.
+    if not comment_only:
+        _submit_target_response(controller, str(response or ""))
+    events = [{
+        "event_type": str(event.get("event_type", "other")),
+        "description": str(event.get("description", "")),
+        "timing": str(event.get("timing", "unspecified")),
+        "details": event.get("details") if isinstance(event.get("details"), dict) else {},
+    } for event in parsed.get("events", [])]
+    comments = [str(comment) for comment in parsed.get("comments", [])]
+    store.save(controller, feedback_texts=comments, operator_events=events)
     result = enrich(controller, store, controller.next_action())
     result["user_input_receipt"] = {
         "mode": parsed.get("mode"),
-        "response_accepted": True,
-        "state_advanced": True,
-        "events_recorded": len(recorded_events),
-        "comments_recorded": len(recorded_comments),
+        "response_accepted": not comment_only,
+        "state_advanced": not comment_only,
+        "events_recorded": len(events),
+        "comments_recorded": len(comments),
     }
     return emit({"success": True, "result": result})
 
@@ -445,7 +439,7 @@ def _verified_template_use(store: AgentSessionStore, session_id: str, raw: dict 
     known_ids = {item["id"] for item in load_templates(store.directory)}
     current = store.load(session_id)
     scored_ids = {
-        str(getattr(node, "node_id", getattr(node, "strategy", "")))
+        str(getattr(node, "node_id", "") or getattr(node, "strategy", ""))
         for node in [*getattr(current, "nodes", []), *getattr(current, "strategy_nodes", [])]
         if getattr(node, "score", None) is not None
     }
@@ -606,7 +600,7 @@ def cmd_result(args: argparse.Namespace, store: AgentSessionStore) -> int:
                     for strategy, item in raw_uses.items()}
             controller.submit_reconstructions(dict(data.get("prompts", {})))
             pending_template_uses.extend(
-                (strategy, use) for strategy, use in uses.items() if use
+                (controller.strategy_ref(strategy), use) for strategy, use in uses.items() if use
             )
         elif state == "WAIT_STRATEGY_RESPONSES":
             controller.submit_strategy_response(str(data.get("response", "")))
@@ -622,6 +616,49 @@ def cmd_result(args: argparse.Namespace, store: AgentSessionStore) -> int:
     return emit_state(controller, store)
 
 
+def cmd_extend_test(args: argparse.Namespace, store: AgentSessionStore) -> int:
+    controller = store.load(args.session_id)
+    values = [args.extra_iterations, args.extra_depth, args.extra_reconstructions]
+    if sum(value > 0 for value in values) != 1 or any(value < 0 for value in values):
+        raise ValueError("specify exactly one positive extra-iterations/depth/reconstructions")
+    old_stop_reason = controller.stop_reason
+    if isinstance(controller, PairController):
+        if not args.extra_iterations:
+            raise ValueError("PAIR requires --extra-iterations")
+        before = controller.max_iterations
+        controller.extend_budget(args.extra_iterations,
+                                 continue_after_success=args.continue_after_success)
+        after = controller.max_iterations
+        unit = "iterations"
+    elif isinstance(controller, TapController):
+        if not args.extra_depth:
+            raise ValueError("TAP requires --extra-depth")
+        before = controller.max_depth
+        controller.extend_budget(args.extra_depth,
+                                 continue_after_success=args.continue_after_success)
+        after = controller.max_depth
+        unit = "depth"
+    elif isinstance(controller, DrAttackController):
+        if not args.extra_reconstructions:
+            raise ValueError("DrAttack requires --extra-reconstructions")
+        before = controller.max_attempts
+        controller.extend_budget(args.extra_reconstructions,
+                                 continue_after_success=args.continue_after_success)
+        after = controller.max_attempts
+        unit = "reconstruction_attempts"
+    else:
+        raise ValueError("unsupported controller")
+    store.save(controller, operator_events=[{
+        "event_type": "budget_extended",
+        "source_ref": None,
+        "description": f"{unit} extended from {before} to {after}; prior stop: {old_stop_reason or 'active'}",
+        "timing": "before_next_attempt",
+        "details": {"unit": unit, "before": before, "after": after,
+                    "previous_stop_reason": old_stop_reason},
+    }])
+    return emit_state(controller, store)
+
+
 def cmd_state(args: argparse.Namespace, store: AgentSessionStore) -> int:
     return emit_state(store.load(args.session_id), store)
 
@@ -631,7 +668,8 @@ def cmd_active(args: argparse.Namespace, store: AgentSessionStore) -> int:
 
 
 def cmd_resume(args: argparse.Namespace, store: AgentSessionStore) -> int:
-    controller = store.load_active()
+    controller = (store.activate(args.session_id) if args.session_id
+                  else store.load_active())
     return emit_state(controller, store)
 
 
@@ -759,9 +797,68 @@ def build_parser() -> argparse.ArgumentParser:
         item.add_argument("session_id")
 
     sub.add_parser("get-active")
-    sub.add_parser("resume")
+    resume = sub.add_parser("resume")
+    resume.add_argument("--session-id", default=None)
     sub.add_parser("list-sessions")
+
+    extension = sub.add_parser("extend-test")
+    extension.add_argument("session_id")
+    extension.add_argument("--extra-iterations", type=int, default=0)
+    extension.add_argument("--extra-depth", type=int, default=0)
+    extension.add_argument("--extra-reconstructions", type=int, default=0)
+    extension.add_argument("--continue-after-success", action="store_true")
+
+    # Request IDs are optional for legacy callers but recommended for every
+    # host-agent mutation, particularly human responses and branch generation.
+    for submit_parser in (user_input, candidate, response, tap_response, dr_response,
+                          judgement, result, feedback, event, extension):
+        submit_parser.add_argument("--request-id", default=None)
     return parser
+
+
+MUTATION_COMMANDS = {
+    "submit-user-input", "submit-candidate", "submit-response",
+    "submit-tap-response", "submit-drattack-response", "submit-judgement",
+    "submit-result", "add-feedback", "add-event", "extend-test",
+}
+
+
+def request_digest(args: argparse.Namespace) -> str:
+    """Hash semantic request content rather than ephemeral --*-file paths."""
+    payload = vars(args).copy()
+    for field in ("command", "store", "session_id", "request_id"):
+        payload.pop(field, None)
+    if args.command == "submit-result":
+        payload.pop("data", None)
+        payload.pop("data_file", None)
+        payload["content"] = read_json(args.data, args.data_file)
+    elif args.command == "submit-user-input":
+        payload.pop("message", None)
+        payload.pop("message_file", None)
+        payload["content"] = read_text(args.message, args.message_file, "message")
+    else:
+        text_inputs = {
+            "submit-candidate": ("prompt", "prompt_file"),
+            "submit-response": ("response", "response_file"),
+            "submit-tap-response": ("response", "response_file"),
+            "submit-drattack-response": ("response", "response_file"),
+            "submit-judgement": ("reason", "reason_file"),
+            "add-feedback": ("feedback", "feedback_file"),
+            "add-event": ("description", "description_file"),
+        }
+        if args.command in text_inputs:
+            field, file_field = text_inputs[args.command]
+            payload.pop(field, None)
+            payload.pop(file_field, None)
+            payload["content"] = read_text(getattr(args, field), getattr(args, file_field), field)
+        if args.command == "submit-judgement":
+            payload.pop("memory_data", None)
+            payload.pop("memory_data_file", None)
+            payload["memory"] = (read_json(args.memory_data, args.memory_data_file)
+                                 if args.memory_data or args.memory_data_file else None)
+    normalized = json.dumps({"command": args.command, "payload": payload},
+                            ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 def main() -> int:
@@ -781,6 +878,7 @@ def main() -> int:
         "submit-drattack-response": cmd_drattack_response,
         "submit-judgement": cmd_judgement,
         "submit-result": cmd_result,
+        "extend-test": cmd_extend_test,
         "add-feedback": cmd_feedback,
         "add-event": cmd_event,
         "get-state": cmd_state,
@@ -791,6 +889,25 @@ def main() -> int:
         "get-summary": cmd_summary,
     }
     try:
+        if args.command in MUTATION_COMMANDS:
+            with store.session_lock(args.session_id):
+                if args.request_id is not None:
+                    if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}", args.request_id):
+                        raise ValueError("invalid request-id: use 1-128 alphanumeric/_.:- characters")
+                    digest = request_digest(args)
+                    previous = store.get_request(args.session_id, args.request_id)
+                    if previous is not None:
+                        if previous.get("digest") != digest:
+                            raise ValueError("request-id already used with different content")
+                        controller = store.load(args.session_id)
+                        result = enrich(controller, store, controller.next_action())
+                        result["idempotency"] = {"request_id": args.request_id,
+                                                 "replayed": True,
+                                                 "state_is_current": True}
+                        return emit({"success": True, "result": result})
+                    store.set_pending_request({"request_id": args.request_id,
+                                               "digest": digest, "command": args.command})
+                return handlers[args.command](args, store)
         return handlers[args.command](args, store)
     except Exception as exc:
         return fail(str(exc))

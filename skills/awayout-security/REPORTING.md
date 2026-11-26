@@ -53,6 +53,8 @@ test-report-{会话ID}/
 
 `common/report.py` 由 `AgentSessionStore.save()` 和 runtime 数据更新自动调用并持续刷新这些文档。测试中断时也应保留已经完成的原文和当前状态。
 
+追加测试预算时保留原会话ID和已有报告，并增加后续轮次；不覆盖旧轮次。DrAttack后续重构批次保留独立的节点标识（例如`word_game@2`），而不是用重名策略覆盖第一批。预算扩展记录在`_runtime.operator_events`中（`budget_extended`）。提交时使用的幂等请求ID和摘要记录在`_runtime.submitted_requests`，而非替换原文。
+
 ## 4. 必填元数据
 
 ```markdown

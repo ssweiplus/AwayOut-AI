@@ -87,6 +87,27 @@ If an unfinished session exists:
 python api.py resume
 ```
 
+To recover an older session instead of the most recently active one:
+
+```bash
+python api.py list-sessions
+python api.py resume --session-id S-xxxxxxxxxx
+```
+
+To increase the budget on a completed session without replacing its history:
+
+```bash
+python api.py extend-test S-xxxxxxxxxx --extra-iterations 5  # PAIR
+python api.py extend-test S-xxxxxxxxxx --extra-depth 2       # TAP
+python api.py extend-test S-xxxxxxxxxx --extra-reconstructions 1 # DrAttack
+```
+
+The extension is explicitly recorded as a `budget_extended` operator event.
+PAIR preserves scored nodes; TAP continues from scored surviving branches;
+DrAttack appends a new reconstruction batch using the existing semantic fragments.
+When a first-success stop policy ended a run, `--continue-after-success` is
+required to override that stopping condition.
+
 Otherwise follow `SKILL.md` to collect the objective and choose an algorithm.
 
 ## Human target-response input
@@ -94,7 +115,7 @@ Otherwise follow `SKILL.md` to collect the objective and choose an algorithm.
 Preferred entrypoint:
 
 ```bash
-python api.py submit-user-input <session_id> --message-file user-input.txt
+python api.py submit-user-input <session_id> --message-file user-input.txt --request-id response-001
 ```
 
 Normal case: `user-input.txt` contains only the complete target-system response, with no marker.
@@ -139,6 +160,7 @@ operator_events
 metadata
 template_config
 template_uses
+submitted_requests
 ```
 
 These do not replace full raw Prompt/Response history.
@@ -154,13 +176,13 @@ python -m common.memory context <session_id>
 Persist a scoring-time memory extraction:
 
 ```bash
-python -m common.memory update <session_id> --data-file memory-update.json
+python -m common.memory update <session_id> --data-file memory-update.json --request-id memory-001
 ```
 
 Record target-system metadata when known:
 
 ```bash
-python -m common.memory metadata <session_id> --target-system "<target>"
+python -m common.memory metadata <session_id> --target-system "<target>" --request-id metadata-001
 ```
 
 ## Troubleshooting
@@ -193,7 +215,20 @@ The report root becomes the parent directory of that store.
 python api.py resume
 ```
 
-Persisted state is authoritative. Repeat only work that had not yet been successfully submitted/checkpointed.
+Persisted state is authoritative. Repeat only work that had not yet been successfully
+submitted/checkpointed. Every mutating `api.py` command supports an optional
+`--request-id`. Always reuse the **same request-id and payload** for an uncertain
+submission. If already committed, the API returns the current checkpoint with
+`result.idempotency.replayed=true` and does not repeat the action. The same ID
+with a different payload is rejected. Identical payloads submitted with **different**
+IDs are NOT deduplicated. Requests without a request ID remain backwards compatible.
+
+Session records are atomically replaced and API mutations on one session hold a
+cross-process OS file lock. Markdown reports are regenerated after state saves.
+A crash before the state write leaves the old checkpoint; a crash after the state
+write can be retried safely with the same ID. Note that this protects the AwayOut
+record, not external target-system actions. `start-test` itself has no request-ID
+deduplication because each invocation creates a new session.
 
 ### Invalid transition
 

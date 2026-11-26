@@ -158,6 +158,8 @@ Implemented:
 - single Host Agent handoff model;
 - authoritative `can_stop` / `stop_reason` protocol;
 - persistent sessions and deterministic tree/summary output;
+- in-place continuation after budget exhaustion (PAIR rounds, TAP depth, DrAttack reconstruction batches);
+- optional request-id on mutating Agent Mode submissions for crash-safe deduplicated retries;
 - objective/algorithm/parameter preflight guidance;
 - Agent Mode self-check and troubleshooting;
 - standalone compatibility.
@@ -178,3 +180,18 @@ candidate/branch and the highest-scored actual test nodes are passed forward as
 optional elite examples. PAIR/TAP/DrAttack scoring and state machines are unchanged.
 
 See [Bundled PyRIT templates and optional imports](skills/awayout-security/TEMPLATES.md).
+
+## Session extension and idempotent retry (Agent Mode)
+
+```bash
+cd skills/awayout-security
+python api.py list-sessions
+python api.py resume --session-id S-xxxxxxxxxx
+python api.py extend-test S-xxxxxxxxxx --extra-iterations 5 --request-id budget-0001
+python api.py submit-result S-xxxxxxxxxx --data-file result.json --request-id step-0001
+```
+
+Use `--extra-depth` for TAP or `--extra-reconstructions` for DrAttack.
+Keep the same request ID and payload when retrying an uncertain submission;
+the API returns the latest persisted checkpoint rather than repeating it.
+See [Agent Mode setup and recovery](skills/awayout-security/INSTALL.md).

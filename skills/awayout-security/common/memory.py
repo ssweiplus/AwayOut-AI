@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import re
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -156,6 +159,7 @@ def main() -> int:
     update.add_argument("session_id")
     update.add_argument("--data")
     update.add_argument("--data-file")
+    update.add_argument("--request-id", default=None)
 
     show = sub.add_parser("context")
     show.add_argument("session_id")
@@ -163,35 +167,69 @@ def main() -> int:
     metadata = sub.add_parser("metadata")
     metadata.add_argument("session_id")
     metadata.add_argument("--target-system")
+    metadata.add_argument("--request-id", default=None)
 
     args = parser.parse_args()
-    store = Path(args.store)
-    path = _session_path(store, args.session_id)
-    document = json.loads(path.read_text(encoding="utf-8"))
-    runtime = document.get("_runtime") if isinstance(document.get("_runtime"), dict) else {}
+    # Local import avoids a module import cycle (store imports memory helpers).
+    # Route writes through AgentSessionStore so API and memory CLI share the
+    # same cross-process lock and atomic session checkpoint format.
+    from common.store import AgentSessionStore
 
-    if args.command == "update":
-        if args.data and args.data_file:
-            raise ValueError("use either --data or --data-file")
-        raw = Path(args.data_file).read_text(encoding="utf-8") if args.data_file else (args.data or "")
-        payload = json.loads(raw)
-        result_value = apply_memory_update(runtime, payload.get("memory_update", payload))
-        result = {"success": True, "working_memory": result_value}
-    elif args.command == "metadata":
-        meta = runtime.get("metadata") if isinstance(runtime.get("metadata"), dict) else {}
-        if args.target_system:
-            meta["target_system"] = args.target_system.strip()
-        runtime["metadata"] = meta
-        result = {"success": True, "metadata": meta}
+    store = AgentSessionStore(args.store)
+    if args.command == "context":
+        result = {"success": True, "memory_context": store.get_memory_context(args.session_id)}
     else:
-        print(json.dumps({"success": True, "memory_context": build_memory_context(document)}, ensure_ascii=False, indent=2))
-        return 0
+        with store.session_lock(args.session_id):
+            if args.command == "update":
+                if args.data and args.data_file:
+                    raise ValueError("use either --data or --data-file")
+                raw = (Path(args.data_file).read_text(encoding="utf-8")
+                       if args.data_file else (args.data or ""))
+                data = json.loads(raw)
+                if not isinstance(data, dict):
+                    raise ValueError("memory update must be an object")
+                value = data.get("memory_update", data)
+                if not isinstance(value, dict):
+                    raise ValueError("memory update must be an object")
+            elif args.command == "metadata":
+                value = {"target_system": args.target_system}
+            else:
+                raise ValueError(f"unexpected command: {args.command}")
 
-    runtime.setdefault("created_at", _now())
-    runtime["updated_at"] = _now()
-    document["_runtime"] = runtime
-    path.write_text(json.dumps(document, ensure_ascii=False, indent=2), encoding="utf-8")
-    sync_report(document, store.parent)
+            if args.request_id is not None:
+                if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}", args.request_id):
+                    raise ValueError("invalid request-id")
+                canonical = json.dumps(
+                    {"command": "memory:" + args.command, "payload": value},
+                    ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+                previous = store.get_request(args.session_id, args.request_id)
+                if previous:
+                    if previous.get("digest") != digest:
+                        raise ValueError("request-id already used with different content")
+                    current = store.get_document(args.session_id).get("_runtime", {})
+                    result = {"success": True, "idempotency": {"replayed": True,
+                                          "request_id": args.request_id},
+                              "working_memory": current.get("working_memory")}
+                    if args.command == "metadata":
+                        result.pop("working_memory", None)
+                        result["metadata"] = current.get("metadata", {})
+                    print(json.dumps(result, ensure_ascii=False, indent=2))
+                    return 0
+                store.set_pending_request({"request_id": args.request_id,
+                                           "digest": digest, "command": "memory:" + args.command})
+            if args.command == "update":
+                result_value = store.add_memory_update(args.session_id, value)
+                result = {"success": True, "working_memory": result_value}
+            else:
+                meta = store.set_metadata(args.session_id, target_system=args.target_system)
+                result = {"success": True, "metadata": meta}
+
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
+        except (OSError, ValueError):
+            pass
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 
