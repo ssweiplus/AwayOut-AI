@@ -119,9 +119,10 @@ class AgentSessionStore:
             return "baseline"
         if algorithm in {"DRATTACK", "DR_ATTACK"} and state == "WAIT_STRATEGY_RESPONSES":
             nodes = [n for n in data.get("strategy_nodes", []) if isinstance(n, dict)]
-            index = int(data.get("current_strategy_index", 0))
+            offset = int(data.get("current_attempt_offset", 0))
+            index = offset + int(data.get("current_strategy_index", 0))
             if 0 <= index < len(nodes):
-                return str(nodes[index].get("strategy") or "") or None
+                return str(nodes[index].get("node_id") or nodes[index].get("strategy") or "") or None
         return None
 
     def _write_active(self, data: dict[str, Any], runtime: dict[str, Any]) -> None:
