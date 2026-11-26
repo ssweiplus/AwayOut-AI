@@ -165,33 +165,31 @@ def main() -> int:
     metadata.add_argument("--target-system")
 
     args = parser.parse_args()
-    store = Path(args.store)
-    path = _session_path(store, args.session_id)
-    document = json.loads(path.read_text(encoding="utf-8"))
-    runtime = document.get("_runtime") if isinstance(document.get("_runtime"), dict) else {}
+    # Local import avoids a module import cycle (store imports memory helpers).
+    # Route writes through AgentSessionStore so API and memory CLI share the
+    # same cross-process lock and atomic session checkpoint format.
+    from common.store import AgentSessionStore
 
-    if args.command == "update":
-        if args.data and args.data_file:
-            raise ValueError("use either --data or --data-file")
-        raw = Path(args.data_file).read_text(encoding="utf-8") if args.data_file else (args.data or "")
-        payload = json.loads(raw)
-        result_value = apply_memory_update(runtime, payload.get("memory_update", payload))
-        result = {"success": True, "working_memory": result_value}
-    elif args.command == "metadata":
-        meta = runtime.get("metadata") if isinstance(runtime.get("metadata"), dict) else {}
-        if args.target_system:
-            meta["target_system"] = args.target_system.strip()
-        runtime["metadata"] = meta
-        result = {"success": True, "metadata": meta}
+    store = AgentSessionStore(args.store)
+    if args.command == "context":
+        result = {"success": True, "memory_context": store.get_memory_context(args.session_id)}
     else:
-        print(json.dumps({"success": True, "memory_context": build_memory_context(document)}, ensure_ascii=False, indent=2))
-        return 0
+        with store.session_lock(args.session_id):
+            if args.command == "update":
+                if args.data and args.data_file:
+                    raise ValueError("use either --data or --data-file")
+                raw = (Path(args.data_file).read_text(encoding="utf-8")
+                       if args.data_file else (args.data or ""))
+                payload = json.loads(raw)
+                result_value = store.add_memory_update(
+                    args.session_id, payload.get("memory_update", payload))
+                result = {"success": True, "working_memory": result_value}
+            elif args.command == "metadata":
+                meta = store.set_metadata(args.session_id, target_system=args.target_system)
+                result = {"success": True, "metadata": meta}
+            else:
+                raise ValueError(f"unexpected command: {args.command}")
 
-    runtime.setdefault("created_at", _now())
-    runtime["updated_at"] = _now()
-    document["_runtime"] = runtime
-    path.write_text(json.dumps(document, ensure_ascii=False, indent=2), encoding="utf-8")
-    sync_report(document, store.parent)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 
