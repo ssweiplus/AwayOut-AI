@@ -113,15 +113,20 @@ def import_pyrit(source: str | Path, destination: str | Path) -> dict:
 
 def load_templates(store_directory: str | Path) -> list[dict]:
     path = catalog_path(store_directory)
-    if not path.is_file():
-        return []
-    data = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(data, list):
-        raise ValueError(f"invalid template catalog: {path}")
-    return [item for item in data if isinstance(item, dict)
-            and isinstance(item.get("template"), str)
-            and len(item["template"]) <= MAX_TEMPLATE_CHARS
-            and isinstance(item.get("id"), str)]
+    paths = sorted((Path(__file__).resolve().parents[1] / "resources" / "pyrit").glob("core-*.json"))
+    if path.is_file():
+        paths.append(path)  # User-imported templates override bundled copies by ID.
+    templates: dict[str, dict] = {}
+    for catalog in paths:
+        data = json.loads(catalog.read_text(encoding="utf-8"))
+        if not isinstance(data, list):
+            raise ValueError(f"invalid template catalog: {catalog}")
+        for item in data:
+            if (isinstance(item, dict) and isinstance(item.get("template"), str)
+                    and len(item["template"]) <= MAX_TEMPLATE_CHARS
+                    and isinstance(item.get("id"), str)):
+                templates[item["id"]] = item
+    return list(templates.values())
 
 
 def select_references(templates: list[dict], strategy: str, objective: str,
