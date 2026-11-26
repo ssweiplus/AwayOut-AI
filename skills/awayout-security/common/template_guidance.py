@@ -113,9 +113,10 @@ def import_pyrit(source: str | Path, destination: str | Path) -> dict:
 
 def load_templates(store_directory: str | Path) -> list[dict]:
     path = catalog_path(store_directory)
-    paths = sorted((Path(__file__).resolve().parents[1] / "resources" / "pyrit").glob("core-*.json"))
-    if path.is_file():
-        paths.append(path)  # User-imported templates override bundled copies by ID.
+    # An explicitly imported catalog replaces the default bundled selection.
+    # This keeps custom test fixtures and user-picked collections deterministic.
+    paths = ([path] if path.is_file() else
+             sorted((Path(__file__).resolve().parents[1] / "resources" / "pyrit").glob("core-*.json")))
     templates: dict[str, dict] = {}
     for catalog in paths:
         data = json.loads(catalog.read_text(encoding="utf-8"))
