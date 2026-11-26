@@ -227,7 +227,7 @@ def _summary(document: dict[str, Any], nodes: list[dict[str, Any]]) -> str:
     started = _text(runtime.get("created_at")) or "未记录"
     updated = _text(runtime.get("updated_at")) or "未记录"
     config_fields = []
-    for key in ("max_iterations", "threshold", "stop_policy", "branch_factor", "max_depth", "width", "top_k_synonyms", "strategies"):
+    for key in ("max_iterations", "threshold", "stop_policy", "branch_factor", "max_depth", "width", "top_k_synonyms", "strategies", "max_attempts", "attempt_no"):
         if key in document:
             config_fields.append(f"{key}={document.get(key)}")
     links = "\n".join(f"- [Round {i}](RESPONSES/{_round_title(i)})" for i in range(1, len(nodes) + 1)) or "- 暂无轮次"
