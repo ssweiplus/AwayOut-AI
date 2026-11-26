@@ -45,6 +45,15 @@ class TemplateUnitTests(unittest.TestCase):
         novel = select_references(SAMPLE, "roleplay", "test", 1, {"pyrit:role"})
         self.assertNotEqual(novel[0]["id"], "pyrit:role")
 
+    def test_checked_in_catalog_when_present(self):
+        bundle = ROOT / "resources" / "pyrit"
+        if not any(bundle.glob("core-*.json")):
+            self.skipTest("bundle not built in this checkout")
+        with tempfile.TemporaryDirectory() as tmp:
+            data = load_templates(tmp)
+            self.assertGreaterEqual(len(data), 100)
+            self.assertTrue(all(item["source"] == "PyRIT" for item in data))
+
     def test_actual_action_validation(self):
         use = normalize_use({
             "action": "combine", "template_ids": ["pyrit:role", "pyrit:logical"],
@@ -86,7 +95,7 @@ class TemplateUnitTests(unittest.TestCase):
     def test_yaml_import_and_missing_catalog(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            self.assertEqual(load_templates(root), [])
+            self.assertIsInstance(load_templates(root), list)  # May include bundled defaults.
             try:
                 import yaml  # noqa: F401
             except ImportError:
@@ -218,7 +227,8 @@ class AgentModeAPITests(unittest.TestCase):
     def test_legacy_without_catalog(self):
         (self.store / "templates" / "pyrit.json").unlink()
         sid = self.start("PAIR")["session_id"]
-        self.assertEqual(self.call("get-state", sid)["handoff"]["template_guidance"]["catalog_size"], 0)
+        self.assertEqual(self.call("get-state", sid)["handoff"]["template_guidance"]["catalog_size"],
+                         len(load_templates(self.store)))
         self.submit(sid, {"prompt": "old client"})
         doc = json.loads((self.store / (sid + ".json")).read_text())
         self.assertFalse(doc["_runtime"].get("template_uses"))
