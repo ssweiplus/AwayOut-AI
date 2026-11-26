@@ -216,6 +216,50 @@ class SessionContinuationTests(unittest.TestCase):
         self.run_cli("resume", "--session-id", first)
         self.assertEqual(self.run_cli("get-active")["session_id"], first)
 
+    def test_inline_and_file_submission_replay_equal(self):
+        sid = self.create()
+        payload = {"prompt": "FIRST", "strategy": "roleplay"}
+        file = Path(self.tmp.name) / "input.json"
+        file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        self.run_cli("submit-result", sid, "--data-file", str(file),
+                     "--request-id", "same-payload")
+        replay = self.run_cli("submit-result", sid, "--data", json.dumps(payload),
+                              "--request-id", "same-payload")
+        self.assertTrue(replay["idempotency"]["replayed"])
+        self.assertEqual(len(self.document(sid)["nodes"]), 1)
+
+    def test_empty_request_id_is_rejected(self):
+        sid = self.create()
+        invalid = self.run_cli("submit-result", sid, "--data", '{"prompt":"FIRST"}',
+                               "--request-id", "", ok=False)
+        self.assertIn("invalid request-id", invalid["error"])
+        self.assertEqual(len(self.document(sid)["nodes"]), 0)
+
+    def test_operator_only_request_replay(self):
+        sid = self.create()
+        self.result(sid, {"prompt": "FIRST"})
+        message = "[[AWAYOUT:OPERATOR]]\n测试者意见"
+        one = self.reply(sid, message, request="operator-only")
+        self.assertEqual(one["state"], "WAIT_TARGET_RESPONSE")
+        replay = self.reply(sid, message, request="operator-only")
+        self.assertTrue(replay["idempotency"]["replayed"])
+        self.assertEqual(len(self.document(sid)["_runtime"]["feedback"]), 1)
+
+    def test_tap_success_extension_requires_opt_in(self):
+        sid = self.create("TAP", "--max-depth", "2", "--branch-factor", "1")
+        self.result(sid, {"branches": [{"prompt": "first", "parent_id": None}]})
+        node = self.document(sid)["current_ids"][0]
+        self.result(sid, {"keep_node_ids": [node]})
+        self.reply(sid, "TEST_OK")
+        done = self.result(sid, {"scores": {node: {"score": 9, "reason": "yes"}}})
+        self.assertEqual(done["state"], "DONE")
+        failed = self.run_cli("extend-test", sid, "--extra-depth", "1", ok=False)
+        self.assertIn("continue-after-success", failed["error"])
+        extended = self.run_cli("extend-test", sid, "--extra-depth", "1",
+                                "--continue-after-success")
+        self.assertEqual(extended["state"], "NEED_BRANCHES")
+        self.assertEqual(extended["parent_ids"], [node])
+
     def test_failed_submit_does_not_reserve_request(self):
         sid = self.create()
         failure = self.result(sid, {"prompt": ""}, request="retry-001", ok=False)
