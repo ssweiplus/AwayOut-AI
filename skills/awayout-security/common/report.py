@@ -95,6 +95,11 @@ def _round_markdown(document: dict[str, Any], node: dict[str, Any], index: int, 
     reason = _text(node.get("reason")) or "尚未评分。"
     feedback = _feedback_for_node(document, node)
     events = _events_for_node(document, node)
+    template_uses = _linked(_runtime(document), "template_uses", _node_ref(document, node))
+    template_use = template_uses[-1] if template_uses else {}
+    template_action = _text(template_use.get("action")) or "未上报"
+    template_ids = ", ".join(template_use.get("template_ids", [])) or "无"
+    experience_ids = ", ".join(template_use.get("experience_ids", [])) or "无"
 
     return f"""# Round {index}
 
@@ -110,6 +115,9 @@ def _round_markdown(document: dict[str, Any], node: dict[str, Any], index: int, 
 | 状态 | {_status(node, threshold)} |
 | 特殊人工操作 | {'有' if events else '无'} |
 | 操作员意见 | {'有' if feedback else '无'} |
+| 模板动作 | {template_action} |
+| 模板ID | {template_ids} |
+| 引用高分经验 | {experience_ids} |
 
 ## 测试者操作
 {_format_events(events)}
