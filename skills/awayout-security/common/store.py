@@ -228,6 +228,28 @@ class AgentSessionStore:
     def get_memory_context(self, session_id: str) -> dict[str, Any]:
         return build_memory_context(self._read_document(session_id))
 
+    def set_template_config(self, session_id: str, mode: str, limit: int) -> dict[str, Any]:
+        path = self._path(session_id)
+        data = self._read_document(session_id)
+        runtime = self._runtime(data)
+        runtime["template_config"] = {"mode": mode, "limit": limit}
+        self._persist_runtime(path, data, runtime)
+        return runtime["template_config"]
+
+    def record_template_use(self, session_id: str, source_ref: str, use: dict[str, Any]) -> dict[str, Any]:
+        """Persist actual template decisions by stable node/strategy reference."""
+        if not source_ref:
+            raise ValueError("template use requires a source reference")
+        path = self._path(session_id)
+        data = self._read_document(session_id)
+        runtime = self._runtime(data)
+        records = runtime.setdefault("template_uses", [])
+        record = {"source_ref": source_ref, **use, "recorded_at": self._now()}
+        records[:] = [x for x in records if x.get("source_ref") != source_ref]
+        records.append(record)
+        self._persist_runtime(path, data, runtime)
+        return record
+
     def set_metadata(self, session_id: str, **values: Any) -> dict[str, Any]:
         path = self._path(session_id)
         data = self._read_document(session_id)
