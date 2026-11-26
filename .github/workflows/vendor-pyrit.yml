@@ -41,20 +41,17 @@ jobs:
       - name: Verify embedded catalog and API tests
         run: |
           python -m unittest discover -s skills/awayout-security/tests -p "test_*.py" -v
-          python - <<'PY'
+          PYTHONPATH=skills/awayout-security python - <<'PY'
           import json
           from pathlib import Path
+          from common.template_guidance import load_templates
           root = Path("skills/awayout-security/resources/pyrit")
           manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
           assert manifest["total_bundled"] == 151, manifest
           assert (root / "LICENSE").is_file()
-          print("Bundled", manifest["total_bundled"], "PyRIT templates")
-          PYTHONPATH=skills/awayout-security python - <<'EOF'
-          from common.template_guidance import load_templates
           actual = load_templates(".awayout-agent")
           assert len(actual) == 151, len(actual)
           print("Runtime catalog OK:", len(actual))
-          EOF
           PY
       - name: Commit embedded templates
         run: |
