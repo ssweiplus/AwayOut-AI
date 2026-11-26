@@ -167,3 +167,14 @@ Reserved next:
 - richer visual attack-tree rendering;
 - optional MCP wrapper;
 - optional curated Seed Prompt library.
+
+
+## Optional PyRIT template guidance (Agent Mode)
+
+AwayOut Agent Mode can import PyRIT YAML prompt templates as **non-binding references**.
+Templates are mapped to preferred AwayOut strategies, while the host Agent may
+reference, rewrite, combine or skip them. Template decisions are recorded per
+candidate/branch and the highest-scored actual test nodes are passed forward as
+optional elite examples. PAIR/TAP/DrAttack scoring and state machines are unchanged.
+
+See [Template import and usage](skills/awayout-security/TEMPLATES.md).
