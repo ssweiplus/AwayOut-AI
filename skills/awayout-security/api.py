@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -395,44 +397,29 @@ def cmd_user_input(args: argparse.Namespace, store: AgentSessionStore) -> int:
     message = read_text(args.message, args.message_file, "message")
     controller = store.load(args.session_id)
     parsed = parse_user_submission(message)
-
-    recorded_events = []
-    for event in parsed.get("events", []):
-        recorded_events.append(store.add_operator_event(
-            args.session_id,
-            str(event.get("event_type", "other")),
-            str(event.get("description", "")),
-            str(event.get("timing", "unspecified")),
-            event.get("details") if isinstance(event.get("details"), dict) else {},
-        ))
-
-    recorded_comments = []
-    for comment in parsed.get("comments", []):
-        recorded_comments.append(store.add_feedback(args.session_id, str(comment)))
-
     response = parsed.get("response")
-    advanced_without_response = parsed.get("mode") == "advanced" and not response
-    if advanced_without_response:
-        controller = store.load(args.session_id)
-        result = enrich(controller, store, controller.next_action())
-        result["user_input_receipt"] = {
-            "mode": parsed.get("mode"),
-            "response_accepted": False,
-            "state_advanced": False,
-            "events_recorded": len(recorded_events),
-            "comments_recorded": len(recorded_comments),
-        }
-        return emit({"success": True, "result": result})
+    comment_only = parsed.get("mode") == "advanced" and not response
 
-    _submit_target_response(controller, str(response or ""))
-    store.save(controller)
+    # Validate and advance in memory before writing *any* event or comment.
+    # One state write also checkpoints the request receipt, so a retried
+    # response cannot duplicate operator events or advance the next branch.
+    if not comment_only:
+        _submit_target_response(controller, str(response or ""))
+    events = [{
+        "event_type": str(event.get("event_type", "other")),
+        "description": str(event.get("description", "")),
+        "timing": str(event.get("timing", "unspecified")),
+        "details": event.get("details") if isinstance(event.get("details"), dict) else {},
+    } for event in parsed.get("events", [])]
+    comments = [str(comment) for comment in parsed.get("comments", [])]
+    store.save(controller, feedback_texts=comments, operator_events=events)
     result = enrich(controller, store, controller.next_action())
     result["user_input_receipt"] = {
         "mode": parsed.get("mode"),
-        "response_accepted": True,
-        "state_advanced": True,
-        "events_recorded": len(recorded_events),
-        "comments_recorded": len(recorded_comments),
+        "response_accepted": not comment_only,
+        "state_advanced": not comment_only,
+        "events_recorded": len(events),
+        "comments_recorded": len(comments),
     }
     return emit({"success": True, "result": result})
 
@@ -622,6 +609,48 @@ def cmd_result(args: argparse.Namespace, store: AgentSessionStore) -> int:
     return emit_state(controller, store)
 
 
+def cmd_extend_test(args: argparse.Namespace, store: AgentSessionStore) -> int:
+    controller = store.load(args.session_id)
+    values = [args.extra_iterations, args.extra_depth, args.extra_reconstructions]
+    if sum(value > 0 for value in values) != 1 or any(value < 0 for value in values):
+        raise ValueError("specify exactly one positive extra-iterations/depth/reconstructions")
+    old_stop_reason = controller.stop_reason
+    if isinstance(controller, PairController):
+        if not args.extra_iterations:
+            raise ValueError("PAIR requires --extra-iterations")
+        before = controller.max_iterations
+        controller.extend_budget(args.extra_iterations,
+                                 continue_after_success=args.continue_after_success)
+        after = controller.max_iterations
+        unit = "iterations"
+    elif isinstance(controller, TapController):
+        if not args.extra_depth:
+            raise ValueError("TAP requires --extra-depth")
+        before = controller.max_depth
+        controller.extend_budget(args.extra_depth,
+                                 continue_after_success=args.continue_after_success)
+        after = controller.max_depth
+        unit = "depth"
+    elif isinstance(controller, DrAttackController):
+        if not args.extra_reconstructions:
+            raise ValueError("DrAttack requires --extra-reconstructions")
+        before = controller.max_attempts
+        controller.extend_budget(args.extra_reconstructions,
+                                 continue_after_success=args.continue_after_success)
+        after = controller.max_attempts
+        unit = "reconstruction_attempts"
+    else:
+        raise ValueError("unsupported controller")
+    store.save(controller, operator_events=[{
+        "event_type": "budget_extended",
+        "description": f"{unit} extended from {before} to {after}; prior stop: {old_stop_reason or 'active'}",
+        "timing": "before_next_attempt",
+        "details": {"unit": unit, "before": before, "after": after,
+                    "previous_stop_reason": old_stop_reason},
+    }])
+    return emit_state(controller, store)
+
+
 def cmd_state(args: argparse.Namespace, store: AgentSessionStore) -> int:
     return emit_state(store.load(args.session_id), store)
 
@@ -631,7 +660,8 @@ def cmd_active(args: argparse.Namespace, store: AgentSessionStore) -> int:
 
 
 def cmd_resume(args: argparse.Namespace, store: AgentSessionStore) -> int:
-    controller = store.load_active()
+    controller = (store.activate(args.session_id) if args.session_id
+                  else store.load_active())
     return emit_state(controller, store)
 
 
@@ -759,8 +789,22 @@ def build_parser() -> argparse.ArgumentParser:
         item.add_argument("session_id")
 
     sub.add_parser("get-active")
-    sub.add_parser("resume")
+    resume = sub.add_parser("resume")
+    resume.add_argument("--session-id", default=None)
     sub.add_parser("list-sessions")
+
+    extension = sub.add_parser("extend-test")
+    extension.add_argument("session_id")
+    extension.add_argument("--extra-iterations", type=int, default=0)
+    extension.add_argument("--extra-depth", type=int, default=0)
+    extension.add_argument("--extra-reconstructions", type=int, default=0)
+    extension.add_argument("--continue-after-success", action="store_true")
+
+    # Request IDs are optional for legacy callers but recommended for every
+    # host-agent mutation, particularly human responses and branch generation.
+    for parser in (user_input, candidate, response, tap_response, dr_response,
+                   judgement, result, feedback, event, extension):
+        parser.add_argument("--request-id", default=None)
     return parser
 
 
@@ -781,6 +825,7 @@ def main() -> int:
         "submit-drattack-response": cmd_drattack_response,
         "submit-judgement": cmd_judgement,
         "submit-result": cmd_result,
+        "extend-test": cmd_extend_test,
         "add-feedback": cmd_feedback,
         "add-event": cmd_event,
         "get-state": cmd_state,
