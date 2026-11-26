@@ -452,7 +452,10 @@ def cmd_import_pyrit(args: argparse.Namespace, store: AgentSessionStore) -> int:
 def cmd_list_templates(args: argparse.Namespace, store: AgentSessionStore) -> int:
     items = load_templates(store.directory)
     return emit({"success": True, "result": {
-        "total": len(items), "catalog": str(catalog_path(store.directory)),
+        "total": len(items),
+        "catalog": (str(catalog_path(store.directory)) if catalog_path(store.directory).exists()
+                    else str(SKILL_ROOT / "resources" / "pyrit")),
+        "bundled": not catalog_path(store.directory).exists(),
         "templates": [{"id": item["id"], "name": item.get("name"),
                        "category": item.get("category"),
                        "classification_source": item.get("classification_source")}
