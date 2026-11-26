@@ -9,6 +9,10 @@
     cd skills/awayout-security
     python api.py --store .awayout-agent list-templates
 
+查看完整模板内容（包括被引导上下文截断的模板）：
+
+    python api.py --store .awayout-agent get-template --id pyrit:aim --objective "当前测试目标"
+
 内置文件位于 `resources/pyrit/core-*.json`。来源与版本记录在 `resources/pyrit/manifest.json`，上游MIT许可证文本保存在 `resources/pyrit/LICENSE`。
 
 本次固定PyRIT上游提交 `695255f6fe299ac7af2876d16fe946f2b7e0aa72`，筛选可与单目标参数兼容的常规/Arth Singh/Pliny模板。社区in-the-wild数据集和多参数模板不混入默认库；不兼容的专项模板记录在manifest中。
@@ -64,13 +68,14 @@ DrAttack：基线阶段使用顶层 template_use；重构阶段使用 template_u
 - template_ids：实际使用的模板 ID 数组；skip 时必须为空
 - experience_ids：实际参考的高分节点 ID 数组
 
-字段值会进行校验；未知模板 ID、错误动作、与固定 mode 冲突等会报错。模板缺失时，旧式不带标记的生成命令仍然可用。
+字段值会进行校验；未知模板ID、错误动作、与固定mode冲突、引用不存在或尚未评分的经验ID等会报错。模板缺失时，旧式不带标记的生成命令仍然可用。
 
 ## 4. 高分经验自动传递
 
 每次进入生成状态，handoff.template_guidance 包含：
-- recommended_templates：至多 3 个候选参考模板；可被 LLM 忽略
-- elite_experiences：当前会话内真实已评分节点的前 3 名（包含评分、评分理由、真实目标响应片段、参考的模板动作）
+- recommended_templates：至多3个候选参考模板；可被LLM忽略。过长模板只返回首尾片段，可用get-template读取全文；推荐会随轮次轮换，避免重复固化
+- elite_experiences：当前会话内评分不低于5的真实节点中得分最高的3名（包含评分、评分理由、真实目标响应片段、参考的模板动作）
+- low_score_lessons：最近2条低分节点的简短失败原因，不作为高分经验
 - instruction、submission_contract：告知 Host Agent 如何使用及记录
 
 高分节点来自 PAIR/TAP/DrAttack 已持久化的数据，自动复用评分，不需要重写原有评分器。仅根据 LLM 评分排序；这不等于独立验证的攻击成功，也不能断言模板造成了高分。完整 Prompt/Response 原文仍由原有会话文件与测试报告保存，handoff 只给出截断摘要。
@@ -86,4 +91,4 @@ DrAttack：基线阶段使用顶层 template_use；重构阶段使用 template_u
 - api.py：导入/列表命令、会话配置、各算法的生成 handoff 与实际使用上报
 - common/store.py：持久化 template_config 和 template_uses
 
-兼容原有会话：没有模板配置时默认 auto；没有模板库时不注入虚构模板；不改变旧的 submit-result 必填字段。
+兼容原有会话：没有模板配置时默认auto；没有模板库时不注入虚构模板；不改变旧的submit-result必填字段。模板动作、经验引用与评分结果在一次会话保存中原子写入，每轮归档报告也包含模板动作和关联经验。
